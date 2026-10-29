@@ -1,0 +1,8 @@
+vectorcore-hss
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This is a fork of github.com/vectorcore-mobile/vectorcore-hss (upstream commit 163029b),
+maintained by itskimffs.
+
+Modifications in this fork (itskimffs, 2026-10); each modified file carries a notice:
+- Rx: Media-Type CONTROL (registration AAR from the P-CSCF) installs no PCC rule, since the Open5GS SMF creates a dedicated bearer per rule (internal/diameter/rx/aar.go)

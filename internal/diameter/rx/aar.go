@@ -1,3 +1,7 @@
+// Modified by itskimffs (2026-10), see NOTICE: Rx Media-Type CONTROL installs no PCC rule (QCI 0).
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package rx
 
 import (
