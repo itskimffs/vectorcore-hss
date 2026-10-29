@@ -350,7 +350,7 @@ func mediaTypeQoSDefaults(mediaType int) (qci int, gbr bool, defaultBW, arpPrior
 	case MediaTypeVideo:
 		return 2, true, 512000, 11, 30 // QCI 2 — GBR VoLTE video, 512 kbps
 	case MediaTypeControl:
-		return 5, false, 64000, 1, 50 // QCI 5 — non-GBR IMS signalling
+		return 0, false, 0, 0, 0 // local: no PCC rule for registration AAR (Open5GS SMF creates a dedicated bearer per rule)
 	default:
 		return 0, false, 0, 0, 0 // no dedicated bearer
 	}
