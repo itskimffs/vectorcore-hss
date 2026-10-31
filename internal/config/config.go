@@ -25,6 +25,39 @@ type Config struct {
 	PCF       PCFConfig       `yaml:"pcf"`
 	Admission AdmissionConfig `yaml:"admission"`
 	Timeouts  TimeoutConfig   `yaml:"timeouts"`
+	S6c       S6cConfig       `yaml:"s6c"`
+	Sh        ShConfig        `yaml:"sh"`
+}
+
+// Sh MSISDN encodings accepted in a UDR User-Identity (ShConfig.MSISDNEncoding).
+const (
+	// MSISDNEncodingTBCD is the TS 29.329 form: bare TBCD digits.
+	MSISDNEncodingTBCD = "tbcd"
+	// MSISDNEncodingLegacyPrefixed also accepts the non-standard
+	// length | NOA | TBCD form sent by older vectorcore-smsc releases,
+	// falling back to bare TBCD when a value is not in that form.
+	MSISDNEncodingLegacyPrefixed = "legacy_prefixed"
+)
+
+// ShConfig tunes Sh (TS 29.328/29.329) behaviour towards Application Servers.
+type ShConfig struct {
+	MSISDNEncoding string `yaml:"msisdn_encoding"`
+}
+
+// S6cConfig tunes S6c (TS 29.338) behaviour towards SMS-SCs.
+//
+// AlertRetryInterval enables a periodic sweep that re-sends Alert-Service-
+// Centre (ALR) for message-waiting data whose subscriber is SMS-registered on
+// an MME but whose alert was never delivered — e.g. the SMS-SC was
+// disconnected when the UE attached, or it never answered the ALR. Without the
+// sweep such an alert is only retried on the subscriber's next ULR/NOR, and an
+// SMS-SC holding the message in WAIT_EVENT never retries it on its own.
+// Per record, retries back off exponentially from AlertRetryInterval up to
+// AlertRetryMaxInterval. Both are in seconds; AlertRetryInterval 0 disables
+// the sweep.
+type S6cConfig struct {
+	AlertRetryInterval    int `yaml:"alert_retry_interval"`
+	AlertRetryMaxInterval int `yaml:"alert_retry_max_interval"`
 }
 
 // AdmissionConfig bounds how many Diameter handler executions may run
@@ -186,6 +219,13 @@ type HSSConfig struct {
 	DWRInterval                  int      `yaml:"DWRInterval"`
 	CancelLocationRequestEnabled bool     `yaml:"CancelLocationRequest_Enabled"`
 	AllowedPeers                 []string `yaml:"AllowedPeers"`
+	// RoutePeers lists Diameter relay peers (DRAs), by Origin-Host, used for
+	// HSS-initiated requests (ALR, CLR, IDR, Gx RAR, ...) whose destination
+	// has no tracked connection — e.g. an SMS-SC or PGW behind a DRA that has
+	// not sent a request since the HSS restarted. Tried in order. Peers that
+	// advertise the Relay Application-Id in CER are used after these without
+	// configuration; leave empty when no DRA is deployed.
+	RoutePeers []string `yaml:"RoutePeers"`
 	// SLhAuthorizedRealms permits additional GMLC Diameter Origin-Realms.
 	// OriginRealm is always permitted; an empty list permits no external realm.
 	SLhAuthorizedRealms []string `yaml:"SLhAuthorizedRealms"`
@@ -326,6 +366,8 @@ func Load(path string) (*Config, error) {
 		PCF:       PCFConfig{Enabled: false, BindAddress: "::", BindPort: 7778, SBIClient: SBIClientConfig{Mode: "direct", ReconnectHoldoffTime: 2 * time.Second}},
 		Admission: AdmissionConfig{S6aMaxConcurrent: 15, GxMaxConcurrent: 8},
 		Timeouts:  TimeoutConfig{S6aSeconds: 5, GxSeconds: 5},
+		S6c:       S6cConfig{AlertRetryInterval: 300, AlertRetryMaxInterval: 3600},
+		Sh:        ShConfig{MSISDNEncoding: MSISDNEncodingTBCD},
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse: %w", err)
@@ -341,6 +383,19 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: hss.DiameterDSCP must be between 0 and 63")
 	}
 	normalizePCRFConfig(&cfg.PCRF)
+	if cfg.S6c.AlertRetryInterval < 0 || cfg.S6c.AlertRetryMaxInterval < 0 {
+		return nil, fmt.Errorf("config: s6c.alert_retry_interval and s6c.alert_retry_max_interval must not be negative")
+	}
+	if cfg.S6c.AlertRetryMaxInterval < cfg.S6c.AlertRetryInterval {
+		cfg.S6c.AlertRetryMaxInterval = cfg.S6c.AlertRetryInterval
+	}
+	switch cfg.Sh.MSISDNEncoding {
+	case MSISDNEncodingTBCD, MSISDNEncodingLegacyPrefixed:
+	case "":
+		cfg.Sh.MSISDNEncoding = MSISDNEncodingTBCD
+	default:
+		return nil, fmt.Errorf("config: sh.msisdn_encoding must be %q or %q, got %q", MSISDNEncodingTBCD, MSISDNEncodingLegacyPrefixed, cfg.Sh.MSISDNEncoding)
+	}
 	if cfg.Database.Type == "" {
 		return nil, fmt.Errorf("config: database.db_type is required")
 	}

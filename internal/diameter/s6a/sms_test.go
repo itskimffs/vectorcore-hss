@@ -247,6 +247,9 @@ func (s *s6aTestStore) GetMWDForIMSI(_ context.Context, _ string) ([]models.Mess
 }
 
 func (s *s6aTestStore) DeleteMWD(_ context.Context, _, _ string) error { return nil }
+func (s *s6aTestStore) ListMWDDueForAlertRetry(_ context.Context, _ time.Time, _ int) ([]models.MessageWaitingData, error) {
+	return nil, nil
+}
 
 func (s *s6aTestStore) InvalidateCache(_ string) {}
 func (s *s6aTestStore) InvalidateAPNCache(_ int) {}

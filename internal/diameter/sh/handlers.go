@@ -21,6 +21,9 @@ type Handlers struct {
 	mcc         string
 	mnc         string
 	peers       PeerLookup
+	// legacyPrefixedMSISDN also accepts the length | NOA | TBCD User-Identity
+	// MSISDN form (sh.msisdn_encoding: legacy_prefixed).
+	legacyPrefixedMSISDN bool
 	// pendingPNR maps Diameter Session-ID to the original outbound request
 	// context so PNA answers can be correlated and logged accurately.
 	pendingPNR sync.Map
@@ -35,5 +38,7 @@ func NewHandlers(cfg *config.Config, store repository.Repository, log *zap.Logge
 		mcc:         cfg.HSS.MCC,
 		mnc:         cfg.HSS.MNC,
 		peers:       peers,
+
+		legacyPrefixedMSISDN: cfg.Sh.MSISDNEncoding == config.MSISDNEncodingLegacyPrefixed,
 	}
 }

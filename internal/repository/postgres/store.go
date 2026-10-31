@@ -774,6 +774,23 @@ func (s *Store) GetMWDForIMSI(ctx context.Context, imsi string) ([]models.Messag
 	return records, nil
 }
 
+func (s *Store) ListMWDDueForAlertRetry(ctx context.Context, attemptedBefore time.Time, limit int) ([]models.MessageWaitingData, error) {
+	var records []models.MessageWaitingData
+	err := s.db.WithContext(ctx).
+		Joins("JOIN subscriber ON subscriber.imsi = message_waiting_data.imsi").
+		Where("subscriber.mme_registered_for_sms = ?", true).
+		Where("subscriber.serving_mme IS NOT NULL AND subscriber.serving_mme <> ''").
+		Where("(message_waiting_data.last_alert_attempt_at IS NULL OR message_waiting_data.last_alert_attempt_at < ?)", attemptedBefore.UTC()).
+		// Portable NULLS FIRST: false (never attempted) sorts before true.
+		Order("message_waiting_data.last_alert_attempt_at IS NOT NULL, message_waiting_data.last_alert_attempt_at, message_waiting_data.id").
+		Limit(limit).
+		Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
 func (s *Store) DeleteMWD(ctx context.Context, imsi, scAddr string) error {
 	return s.db.WithContext(ctx).
 		Where("imsi = ? AND sc_address = ?", imsi, scAddr).

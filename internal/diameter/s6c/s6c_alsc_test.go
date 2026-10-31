@@ -194,6 +194,93 @@ func TestALSC_SendStoresPendingSession(t *testing.T) {
 	}
 }
 
+// shortenALRAnswerTimeout sets alrAnswerTimeout for the duration of a test.
+func shortenALRAnswerTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := alrAnswerTimeout
+	alrAnswerTimeout = d
+	t.Cleanup(func() { alrAnswerTimeout = orig })
+}
+
+// sendALRAndGetSessionID sends an ALR for a single MWD record and returns the
+// Session-Id written to the peer.
+func sendALRAndGetSessionID(t *testing.T, h *Handlers, store *s6cStore, imsi, scAddr string) string {
+	t.Helper()
+	store.addSubscriber(&models.Subscriber{IMSI: imsi})
+	store.mwds[imsi] = []models.MessageWaitingData{{
+		IMSI:          imsi,
+		SCAddress:     scAddr,
+		SCOriginHost:  "smsc-timeout.test.net",
+		SCOriginRealm: "smsc.realm.net",
+	}}
+	conn := &captureConn{}
+	h.peers = &peerLookupStub{conns: map[string]diam.Conn{"smsc-timeout.test.net": conn}}
+
+	h.SendALSCForIMSI(imsi)
+
+	sidAVP := findAVPDirect(parseWrittenMessage(t, conn), avp.SessionID, 0)
+	if sidAVP == nil {
+		t.Fatal("missing Session-Id in ALR request")
+	}
+	return string(sidAVP.Data.(datatype.UTF8String))
+}
+
+func TestALSC_PendingExpiresWithoutALA(t *testing.T) {
+	shortenALRAnswerTimeout(t, 20*time.Millisecond)
+	store := newS6cStore()
+	h := newTestHandlers(store)
+	imsi := "001010000000120"
+
+	sid := sendALRAndGetSessionID(t, h, store, imsi, "12125550020")
+	if _, ok := h.pendingALR.Load(sid); !ok {
+		t.Fatal("pending ALR session not recorded")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := h.pendingALR.Load(sid); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("pending ALR session not expired after timeout")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if len(store.deletedMWD) != 0 {
+		t.Fatalf("DeleteMWD called %d times on expiry, want 0", len(store.deletedMWD))
+	}
+	if got := len(store.mwds[imsi]); got != 1 {
+		t.Fatalf("MWD records after expiry = %d, want 1", got)
+	}
+
+	// A late ALA for the expired session must not delete MWD.
+	h.ALA(nil, buildALA(t, sid, diamResultSuccess))
+	if len(store.deletedMWD) != 0 {
+		t.Fatalf("DeleteMWD called %d times on late ALA, want 0", len(store.deletedMWD))
+	}
+}
+
+func TestALSC_ALABeforeTimeoutDeletesMWDOnce(t *testing.T) {
+	shortenALRAnswerTimeout(t, 20*time.Millisecond)
+	store := newS6cStore()
+	h := newTestHandlers(store)
+	imsi := "001010000000121"
+
+	sid := sendALRAndGetSessionID(t, h, store, imsi, "12125550021")
+	h.ALA(nil, buildALA(t, sid, diamResultSuccess))
+
+	// Let the expiry timer fire; it must find nothing to do.
+	time.Sleep(60 * time.Millisecond)
+
+	if len(store.deletedMWD) != 1 {
+		t.Fatalf("DeleteMWD called %d times, want 1", len(store.deletedMWD))
+	}
+	if _, ok := h.pendingALR.Load(sid); ok {
+		t.Fatal("pending ALR session still present after ALA and timeout")
+	}
+}
+
 func TestASA_SuccessDeletesMWD(t *testing.T) {
 	store := newS6cStore()
 	h := newTestHandlers(store)

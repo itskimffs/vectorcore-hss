@@ -54,7 +54,7 @@ networks, written in Go.
 |---------|-----------|-------------|
 | SRI-SM / SRI-SMA | SMS-SC -> HSS | Send-Routing-Info-for-SM - looks up subscriber by MSISDN (or IMSI, BCD-encoded on the wire); returns IMSI, serving MME address and realm, and MME-Number-for-MT-SMS so the SMS-SC can route the MT SMS via SGd/T4. Returns MWD-Status flags if message waiting data is pending. |
 | RSDS / RSDSA | SMS-SC -> HSS | Report-SM-Delivery-Status - on delivery failure (absent subscriber or memory-capacity exceeded) stores a Message Waiting Data record keyed to the SMS-SC; on successful delivery clears the MWD record. Supports MNRF and MCEF status flags per TS 29.338 §5.3.2.4. |
-| ALSC / ALSCA | HSS -> SMS-SC | Alert-Service-Centre - HSS-initiated; sent to each SMS-SC with a pending MWD record when the subscriber re-attaches (triggered by ULR success). MWD is deleted only after the SMS-SC returns Result-Code 2001; if the peer is unreachable the MWD is left in place and retried on the next ULR. |
+| ALSC / ALSCA | HSS -> SMS-SC | Alert-Service-Centre - HSS-initiated; sent to each SMS-SC with a pending MWD record when the subscriber re-attaches (triggered by ULR success). MWD is deleted only after the SMS-SC returns Result-Code 2001; if the peer is unreachable the MWD is left in place and retried on the next ULR/NOR and by a periodic retry sweep (`s6c.alert_retry_interval`, default 300 s with backoff to 1 h). |
 
 The ULR handler on S6a detects SMS-in-MME capability from ULR-Flags and the MME-Number-for-MT-SMS AVP, stores the registration state on the subscriber record, and sets the MME-Registered-for-SMS bit in ULA-Flags. SRI-SM returns this MME number in the Serving-Node grouped AVP so the SMS-SC can route directly to the MME.
 
@@ -73,7 +73,7 @@ The ULR handler on S6a detects SMS-in-MME capability from ULR-Flags and the MME-
 
 | Command | Direction | Description |
 |---------|-----------|-------------|
-| UDR / UDA | AS -> HSS | User-Data - returns Sh-Data XML (AVP 702) for a subscriber. Dynamically renders IMPU, IMPI, S-CSCF name, IMS user state, and IFC (IFC only returned for Data-Reference=13). Supports RepositoryData (AS-stored blob) and all standard Data-Reference values (0, 10-17). |
+| UDR / UDA | AS -> HSS | User-Data - returns Sh-Data XML (AVP 702) for a subscriber. Dynamically renders IMPU, IMPI, S-CSCF name, IMS user state, and IFC (IFC only returned for Data-Reference=13). Supports RepositoryData (AS-stored blob) and all standard Data-Reference values (0, 10-17). A User-Identity MSISDN must be bare TBCD (TS 29.329); set `sh.msisdn_encoding: legacy_prefixed` to also accept the `len \| NOA \| TBCD` form of older vectorcore-smsc releases. |
 | PNR / PNA | HSS -> AS | Push-Notification - pushes updated subscriber data to the Application Server. |
 
 ### Gx - PCRF <-> PGW (3GPP TS 29.212)

@@ -327,3 +327,75 @@ func writeTestConfig(t *testing.T, body string) string {
 	}
 	return path
 }
+
+const s6cTestConfigBase = `
+hss:
+  OriginHost: hss01.example.org
+  OriginRealm: example.org
+database:
+  db_type: sqlite
+  database: ":memory:"
+`
+
+func TestLoadDefaultsS6cAlertRetry(t *testing.T) {
+	cfg, err := Load(writeTestConfig(t, s6cTestConfigBase))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.S6c.AlertRetryInterval != 300 || cfg.S6c.AlertRetryMaxInterval != 3600 {
+		t.Fatalf("S6c defaults = %+v, want interval 300, max 3600", cfg.S6c)
+	}
+}
+
+func TestLoadS6cAlertRetryDisabled(t *testing.T) {
+	cfg, err := Load(writeTestConfig(t, s6cTestConfigBase+"s6c:\n  alert_retry_interval: 0\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.S6c.AlertRetryInterval != 0 {
+		t.Fatalf("alert_retry_interval = %d, want 0 (disabled)", cfg.S6c.AlertRetryInterval)
+	}
+}
+
+func TestLoadS6cAlertRetryMaxRaisedToInterval(t *testing.T) {
+	cfg, err := Load(writeTestConfig(t, s6cTestConfigBase+"s6c:\n  alert_retry_interval: 900\n  alert_retry_max_interval: 60\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.S6c.AlertRetryMaxInterval != 900 {
+		t.Fatalf("alert_retry_max_interval = %d, want raised to 900", cfg.S6c.AlertRetryMaxInterval)
+	}
+}
+
+func TestLoadS6cAlertRetryRejectsNegative(t *testing.T) {
+	if _, err := Load(writeTestConfig(t, s6cTestConfigBase+"s6c:\n  alert_retry_interval: -1\n")); err == nil {
+		t.Fatal("Load() accepted negative s6c.alert_retry_interval")
+	}
+}
+
+func TestLoadShMSISDNEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		name, yaml, want string
+	}{
+		{"default", "", MSISDNEncodingTBCD},
+		{"empty", "sh:\n  msisdn_encoding: \"\"\n", MSISDNEncodingTBCD},
+		{"tbcd", "sh:\n  msisdn_encoding: tbcd\n", MSISDNEncodingTBCD},
+		{"legacy", "sh:\n  msisdn_encoding: legacy_prefixed\n", MSISDNEncodingLegacyPrefixed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeTestConfig(t, s6cTestConfigBase+tc.yaml))
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Sh.MSISDNEncoding != tc.want {
+				t.Fatalf("sh.msisdn_encoding = %q, want %q", cfg.Sh.MSISDNEncoding, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadShMSISDNEncodingRejectsUnknown(t *testing.T) {
+	if _, err := Load(writeTestConfig(t, s6cTestConfigBase+"sh:\n  msisdn_encoding: bcd\n")); err == nil {
+		t.Fatal("Load() accepted unknown sh.msisdn_encoding")
+	}
+}

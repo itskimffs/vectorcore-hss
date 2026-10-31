@@ -18,6 +18,16 @@ import (
 const diamResultSuccess = uint32(2001)
 const maxMWDEntriesPerSubscriber = 10
 
+// alrAnswerTimeout bounds how long an in-flight ALR is tracked in pendingALR
+// while waiting for its ALA. ALRs are written without a Diameter Tx timer, so
+// without this an unanswered ALR (dead connection, SMS-SC crash, lost answer)
+// would leak its entry forever. Expiry only drops the tracking entry: the MWD
+// is retained and the alert is retried on the next trigger. An ALA arriving
+// after expiry is logged as "unknown session" and the MWD is likewise kept, so
+// the SMS-SC may see a duplicate alert later — harmless, unlike a lost one.
+// A var so tests can shorten it.
+var alrAnswerTimeout = 60 * time.Second
+
 // SendALRForIMSI loads any pending MWD for a subscriber and sends an ALR
 // request to the relevant SMS-SC peers when the trigger matches the stored
 // retry state.
@@ -59,87 +69,116 @@ func (h *Handlers) sendALRForIMSI(imsi string, trigger AlertTrigger, maximumUEAv
 		if !triggerMatchesMWD(trigger, mwd.MWDStatusFlags) {
 			continue
 		}
+		h.sendALR(ctx, sub, mwd, trigger, maximumUEAvailabilityTime)
+	}
+}
 
-		conn, ok := h.peers.GetConn(mwd.SCOriginHost)
-		if !ok {
-			h.log.Warn("s6c: ALR skipped — SMS-SC not connected",
-				zap.String("imsi", imsi),
-				zap.String("sc_origin_host", mwd.SCOriginHost),
-				zap.String("trigger", string(trigger)))
-			continue
-		}
-
-		sid := fmt.Sprintf("%s;%d;alr", h.originHost, time.Now().UnixNano())
-		req := diam.NewRequest(cmdALR, AppIDS6c, nil)
-		req.NewAVP(avp.SessionID, avp.Mbit, 0, datatype.UTF8String(sid))
-		req.NewAVP(avp.AuthSessionState, avp.Mbit, 0, datatype.Enumerated(1))
-		req.NewAVP(avp.OriginHost, avp.Mbit, 0, datatype.DiameterIdentity(h.originHost))
-		req.NewAVP(avp.OriginRealm, avp.Mbit, 0, datatype.DiameterIdentity(h.originRealm))
-		req.NewAVP(avp.DestinationHost, avp.Mbit, 0, datatype.DiameterIdentity(mwd.SCOriginHost))
-		req.NewAVP(avp.DestinationRealm, avp.Mbit, 0, datatype.DiameterIdentity(mwd.SCOriginRealm))
-
-		// SC-Address: E.164 of the SMS-SC, BCD-encoded.
-		req.NewAVP(avpSCAddress, avp.Mbit|avp.Vbit, Vendor3GPP,
-			datatype.OctetString(encodeMSISDNBytes(mwd.SCAddress)))
-
-		req.NewAVP(avpUserIdentifier, avp.Mbit|avp.Vbit, Vendor3GPP,
-			buildUserIdentifierAVP(imsi, sub.MSISDN))
-
-		if payload, err := decodeSMSMICorrelationID(mwd.SMSMICorrelationID); err != nil {
-			h.log.Warn("s6c: ALR skipping invalid SMSMI-Correlation-ID",
-				zap.String("imsi", imsi),
-				zap.String("sc_addr", mwd.SCAddress),
-				zap.Error(err))
-		} else if len(payload) > 0 {
-			req.NewAVP(avpSMSMICorrelationID, avp.Vbit, Vendor3GPP, datatype.OctetString(payload))
-		}
-
-		if mwd.AbsentUserDiagnosticSM != nil {
-			req.NewAVP(avpAbsentUserDiagnosticSM, avp.Mbit|avp.Vbit, Vendor3GPP,
-				datatype.Unsigned32(*mwd.AbsentUserDiagnosticSM))
-		}
-
-		if servingNode := buildServingNodeAVP(sub); servingNode != nil {
-			req.InsertAVP(servingNode)
-			req.NewAVP(avpSMSGMSCAlertEvent, avp.Vbit, Vendor3GPP,
-				datatype.Unsigned32(SMSGMSCAlertEventUEAvailableForMTSMS))
-		}
-		if maximumUEAvailabilityTime != nil {
-			req.NewAVP(avpMaximumUEAvailabilityTime, avp.Vbit, Vendor3GPP,
-				datatype.Time(*maximumUEAvailabilityTime))
-		}
-
-		if _, err := req.WriteTo(conn); err != nil {
-			h.log.Error("s6c: ALR send failed",
-				zap.String("imsi", imsi),
-				zap.String("sc_origin_host", mwd.SCOriginHost),
-				zap.String("trigger", string(trigger)),
-				zap.Error(err))
-			continue
-		}
-
-		now := time.Now().UTC()
-		triggerName := string(trigger)
-		mwd.LastAlertTrigger = &triggerName
-		mwd.LastAlertAttemptAt = &now
-		mwd.AlertAttemptCount++
-		if err := h.store.StoreMWD(ctx, &mwd); err != nil {
-			h.log.Warn("s6c: ALR metadata update failed",
-				zap.String("imsi", imsi),
-				zap.String("sc_addr", mwd.SCAddress),
-				zap.Error(err))
-		}
-
-		// Record the in-flight session so ALA() can delete MWD on success.
-		h.pendingALR.Store(sid, pendingALREntry{imsi: imsi, scAddr: mwd.SCAddress})
-
-		h.log.Info("s6c: ALR sent — awaiting ALA",
+// sendALR sends one ALR for mwd to its SMS-SC, records the attempt on the MWD
+// row and tracks the session in pendingALR. It reports whether the request was
+// written. MWD is never deleted here; see ALA().
+func (h *Handlers) sendALR(ctx context.Context, sub *models.Subscriber, mwd models.MessageWaitingData, trigger AlertTrigger, maximumUEAvailabilityTime *time.Time) bool {
+	imsi := sub.IMSI
+	conn, ok := h.peers.GetConn(mwd.SCOriginHost)
+	if !ok {
+		h.log.Warn("s6c: ALR skipped — SMS-SC not connected",
 			zap.String("imsi", imsi),
 			zap.String("sc_origin_host", mwd.SCOriginHost),
-			zap.String("sc_addr", mwd.SCAddress),
-			zap.String("session_id", sid),
 			zap.String("trigger", string(trigger)))
+		return false
 	}
+
+	sid := fmt.Sprintf("%s;%d;alr", h.originHost, time.Now().UnixNano())
+	req := diam.NewRequest(cmdALR, AppIDS6c, nil)
+	req.NewAVP(avp.SessionID, avp.Mbit, 0, datatype.UTF8String(sid))
+	req.NewAVP(avp.AuthSessionState, avp.Mbit, 0, datatype.Enumerated(1))
+	req.NewAVP(avp.OriginHost, avp.Mbit, 0, datatype.DiameterIdentity(h.originHost))
+	req.NewAVP(avp.OriginRealm, avp.Mbit, 0, datatype.DiameterIdentity(h.originRealm))
+	req.NewAVP(avp.DestinationHost, avp.Mbit, 0, datatype.DiameterIdentity(mwd.SCOriginHost))
+	req.NewAVP(avp.DestinationRealm, avp.Mbit, 0, datatype.DiameterIdentity(mwd.SCOriginRealm))
+
+	// SC-Address: E.164 of the SMS-SC, BCD-encoded.
+	req.NewAVP(avpSCAddress, avp.Mbit|avp.Vbit, Vendor3GPP,
+		datatype.OctetString(encodeMSISDNBytes(mwd.SCAddress)))
+
+	req.NewAVP(avpUserIdentifier, avp.Mbit|avp.Vbit, Vendor3GPP,
+		buildUserIdentifierAVP(imsi, sub.MSISDN))
+
+	if payload, err := decodeSMSMICorrelationID(mwd.SMSMICorrelationID); err != nil {
+		h.log.Warn("s6c: ALR skipping invalid SMSMI-Correlation-ID",
+			zap.String("imsi", imsi),
+			zap.String("sc_addr", mwd.SCAddress),
+			zap.Error(err))
+	} else if len(payload) > 0 {
+		req.NewAVP(avpSMSMICorrelationID, avp.Vbit, Vendor3GPP, datatype.OctetString(payload))
+	}
+
+	if mwd.AbsentUserDiagnosticSM != nil {
+		req.NewAVP(avpAbsentUserDiagnosticSM, avp.Mbit|avp.Vbit, Vendor3GPP,
+			datatype.Unsigned32(*mwd.AbsentUserDiagnosticSM))
+	}
+
+	if servingNode := buildServingNodeAVP(sub); servingNode != nil {
+		req.InsertAVP(servingNode)
+		req.NewAVP(avpSMSGMSCAlertEvent, avp.Vbit, Vendor3GPP,
+			datatype.Unsigned32(SMSGMSCAlertEventUEAvailableForMTSMS))
+	}
+	if maximumUEAvailabilityTime != nil {
+		req.NewAVP(avpMaximumUEAvailabilityTime, avp.Vbit, Vendor3GPP,
+			datatype.Time(*maximumUEAvailabilityTime))
+	}
+
+	if _, err := req.WriteTo(conn); err != nil {
+		h.log.Error("s6c: ALR send failed",
+			zap.String("imsi", imsi),
+			zap.String("sc_origin_host", mwd.SCOriginHost),
+			zap.String("trigger", string(trigger)),
+			zap.Error(err))
+		return false
+	}
+
+	now := time.Now().UTC()
+	triggerName := string(trigger)
+	mwd.LastAlertTrigger = &triggerName
+	mwd.LastAlertAttemptAt = &now
+	mwd.AlertAttemptCount++
+	if err := h.store.StoreMWD(ctx, &mwd); err != nil {
+		h.log.Warn("s6c: ALR metadata update failed",
+			zap.String("imsi", imsi),
+			zap.String("sc_addr", mwd.SCAddress),
+			zap.Error(err))
+	}
+
+	// Record the in-flight session so ALA() can delete MWD on success,
+	// and expire it if no ALA arrives. Whichever of ALA() and the timer
+	// wins LoadAndDelete handles the entry; the other is a no-op.
+	h.pendingALR.Store(sid, pendingALREntry{imsi: imsi, scAddr: mwd.SCAddress})
+	h.expirePendingALR(sid)
+
+	h.log.Info("s6c: ALR sent — awaiting ALA",
+		zap.String("imsi", imsi),
+		zap.String("sc_origin_host", mwd.SCOriginHost),
+		zap.String("sc_addr", mwd.SCAddress),
+		zap.String("session_id", sid),
+		zap.String("trigger", string(trigger)))
+	return true
+}
+
+// expirePendingALR drops sid from pendingALR after alrAnswerTimeout unless
+// ALA() has already consumed it. MWD is left in place for retry.
+func (h *Handlers) expirePendingALR(sid string) {
+	timeout := alrAnswerTimeout
+	time.AfterFunc(timeout, func() {
+		entry, ok := h.pendingALR.LoadAndDelete(sid)
+		if !ok {
+			return
+		}
+		pending := entry.(pendingALREntry)
+		h.log.Warn("s6c: ALR timed out awaiting ALA — MWD retained for retry",
+			zap.String("imsi", pending.imsi),
+			zap.String("sc_addr", pending.scAddr),
+			zap.String("session_id", sid),
+			zap.Duration("timeout", timeout))
+	})
 }
 
 // SendALSCForIMSI is a compatibility wrapper for older call sites while the
@@ -151,7 +190,7 @@ func (h *Handlers) SendALSCForIMSI(imsi string) {
 
 func triggerMatchesMWD(trigger AlertTrigger, statusFlags uint32) bool {
 	switch trigger {
-	case AlertTriggerAttach, AlertTriggerUserAvailable:
+	case AlertTriggerAttach, AlertTriggerUserAvailable, AlertTriggerRetry:
 		return statusFlags == 0 || statusFlags&MWDStatusMNRF != 0
 	case AlertTriggerMemoryAvailable:
 		return statusFlags&MWDStatusMCEF != 0
@@ -179,7 +218,8 @@ func (h *Handlers) ALA(conn diam.Conn, msg *diam.Message) {
 
 	entry, ok := h.pendingALR.LoadAndDelete(sid)
 	if !ok {
-		// Not originated by us or already handled.
+		// Not originated by us, already handled, or timed out
+		// (see alrAnswerTimeout).
 		h.log.Warn("s6c: ALA for unknown session",
 			zap.String("session_id", sid),
 			zap.String("origin_host", string(ala.OriginHost)))

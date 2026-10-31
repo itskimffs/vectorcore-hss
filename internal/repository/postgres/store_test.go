@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -170,5 +171,66 @@ func TestServingAPNByUEIPv6Prefix(t *testing.T) {
 	}
 	if got, err := s.GetServingAPNByUEIPv6Prefix(ctx, "2001:db8:46:2b::/64"); err != nil || *got.PCRFSessionID != "smf;1;60;app_gx" {
 		t.Fatalf("new prefix lookup got %+v err %v", got, err)
+	}
+}
+
+func TestListMWDDueForAlertRetry(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	mme := "mme01.example.org"
+	empty := ""
+	yes, no := true, false
+
+	subs := []models.Subscriber{
+		{IMSI: "001010000000001", AUCID: 1, DefaultAPN: 1, APNList: "1", ServingMME: &mme, MMERegisteredForSMS: &yes},
+		{IMSI: "001010000000002", AUCID: 2, DefaultAPN: 1, APNList: "1", ServingMME: &mme, MMERegisteredForSMS: &no},
+		{IMSI: "001010000000003", AUCID: 3, DefaultAPN: 1, APNList: "1", MMERegisteredForSMS: &yes},
+		{IMSI: "001010000000004", AUCID: 4, DefaultAPN: 1, APNList: "1", ServingMME: &empty, MMERegisteredForSMS: &yes},
+	}
+	for i := range subs {
+		if err := s.db.Create(&subs[i]).Error; err != nil {
+			t.Fatalf("seed subscriber %s: %v", subs[i].IMSI, err)
+		}
+	}
+
+	old := now.Add(-time.Hour)
+	older := now.Add(-2 * time.Hour)
+	recent := now.Add(-time.Minute)
+	for _, rec := range []models.MessageWaitingData{
+		{IMSI: "001010000000001", SCAddress: "sc-recent", LastAlertAttemptAt: &recent},
+		{IMSI: "001010000000001", SCAddress: "sc-old", LastAlertAttemptAt: &old},
+		{IMSI: "001010000000001", SCAddress: "sc-never"},
+		{IMSI: "001010000000001", SCAddress: "sc-older", LastAlertAttemptAt: &older},
+		{IMSI: "001010000000002", SCAddress: "sc-not-sms-registered"},
+		{IMSI: "001010000000003", SCAddress: "sc-no-mme"},
+		{IMSI: "001010000000004", SCAddress: "sc-empty-mme"},
+		{IMSI: "001010000000099", SCAddress: "sc-no-subscriber"},
+	} {
+		rec.SCOriginHost, rec.SCOriginRealm = "smsc.example.org", "example.org"
+		if err := s.StoreMWD(ctx, &rec); err != nil {
+			t.Fatalf("seed MWD %s: %v", rec.SCAddress, err)
+		}
+	}
+
+	got, err := s.ListMWDDueForAlertRetry(ctx, now.Add(-5*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListMWDDueForAlertRetry: %v", err)
+	}
+	var addrs []string
+	for _, r := range got {
+		addrs = append(addrs, r.SCAddress)
+	}
+	want := []string{"sc-never", "sc-older", "sc-old"}
+	if strings.Join(addrs, ",") != strings.Join(want, ",") {
+		t.Fatalf("due records = %v, want %v (never-attempted first, then oldest attempt)", addrs, want)
+	}
+
+	limited, err := s.ListMWDDueForAlertRetry(ctx, now.Add(-5*time.Minute), 1)
+	if err != nil {
+		t.Fatalf("ListMWDDueForAlertRetry limit: %v", err)
+	}
+	if len(limited) != 1 || limited[0].SCAddress != "sc-never" {
+		t.Fatalf("limited result = %+v, want only sc-never", limited)
 	}
 }

@@ -257,6 +257,9 @@ func (m *mockStore) GetMWDForIMSI(_ context.Context, _ string) ([]models.Message
 	return nil, nil
 }
 func (m *mockStore) DeleteMWD(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) ListMWDDueForAlertRetry(_ context.Context, _ time.Time, _ int) ([]models.MessageWaitingData, error) {
+	return nil, nil
+}
 
 // ── IPA client helpers ────────────────────────────────────────────────────────
 

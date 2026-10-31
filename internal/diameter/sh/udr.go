@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/svinson1121/vectorcore-hss/internal/diameter/avputil"
+	"github.com/svinson1121/vectorcore-hss/internal/diameter/tbcd"
 	"github.com/svinson1121/vectorcore-hss/internal/ims"
 	"github.com/svinson1121/vectorcore-hss/internal/models"
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
@@ -45,29 +46,30 @@ func normalizePublicIdentity(identity string) string {
 // extractIdentity pulls the subscriber identity out of a User-Identity grouped
 // AVP (code 700, vendor 10415). msg.Unmarshal does not reliably decode
 // vendor-specific grouped AVPs via struct tags, so we use FindAVP + manual
-// sub-AVP iteration instead.
-func extractIdentity(msg *diam.Message) string {
+// sub-AVP iteration instead. It returns an error for an MSISDN that is not
+// valid TBCD (in the configured encoding).
+func (h *Handlers) extractIdentity(msg *diam.Message) (string, error) {
 	uiAVP, err := msg.FindAVP(avpUserIdentity, Vendor3GPP)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	grouped, ok := uiAVP.Data.(*diam.GroupedAVP)
 	if !ok {
-		return ""
+		return "", nil
 	}
 	for _, sub := range grouped.AVP {
 		switch sub.Code {
 		case avpPublicIdentity: // 601 — UTF8String
 			if s, ok := sub.Data.(datatype.UTF8String); ok && len(s) > 0 {
-				return string(s)
+				return string(s), nil
 			}
 		case avpMSISDN: // 701 — OctetString, TBCD-encoded
 			if o, ok := sub.Data.(datatype.OctetString); ok && len(o) > 0 {
-				return decodeMSISDN([]byte(o))
+				return h.decodeMSISDN([]byte(o))
 			}
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // lookupIMSSubscriber tries to find an IMS subscriber using several identity
@@ -136,7 +138,11 @@ func (h *Handlers) UDR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 
 	// msg.Unmarshal does not populate vendor-specific grouped AVPs reliably.
 	// Extract User-Identity manually via FindAVP.
-	identity := extractIdentity(msg)
+	identity, err := h.extractIdentity(msg)
+	if err != nil {
+		h.log.Warn("sh: UDR invalid MSISDN in User-Identity", zap.Error(err))
+		return avputil.ConstructFailureAnswer(msg, udr.SessionID, h.originHost, h.originRealm, DiameterErrorUserUnknown), nil
+	}
 	if identity == "" {
 		h.log.Warn("sh: UDR missing identity")
 		return avputil.ConstructFailureAnswer(msg, udr.SessionID, h.originHost, h.originRealm, DiameterErrorUserUnknown), nil
@@ -204,47 +210,21 @@ func (h *Handlers) UDR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	return ans, nil
 }
 
-// decodeTBCD converts a TBCD-encoded byte slice (as used in the MSISDN AVP)
-// to a digit string, stripping the 0xF filler nibble.
-func decodeTBCD(b []byte) string {
-	digits := make([]byte, 0, len(b)*2)
-	for _, octet := range b {
-		lo := octet & 0x0F
-		hi := (octet >> 4) & 0x0F
-		if lo != 0xF {
-			digits = append(digits, '0'+lo)
-		}
-		if hi != 0xF {
-			digits = append(digits, '0'+hi)
+// decodeMSISDN decodes a User-Identity MSISDN. TS 29.329 §6.3.2 defines it as
+// bare TBCD digits, decoded strictly so that invalid nibbles or misplaced
+// filler are rejected rather than looked up.
+//
+// With sh.msisdn_encoding: legacy_prefixed it first tries the non-standard
+// length | NOA | TBCD form sent by older vectorcore-smsc releases. That form is
+// only accepted when the length octet matches exactly and the NOA octet has
+// its extension bit set; anything else is decoded as bare TBCD. The match is
+// only ambiguous for a full-length (8-octet) bare number starting "70" whose
+// fourth digit is 8 or 9, which is why the mode is opt-in.
+func (h *Handlers) decodeMSISDN(b []byte) (string, error) {
+	if h.legacyPrefixedMSISDN && len(b) >= 3 && int(b[0]) == len(b)-1 && b[1]&0x80 != 0 {
+		if digits, err := tbcd.DecodeMSISDN(b[2:]); err == nil {
+			return digits, nil
 		}
 	}
-	return string(digits)
-}
-
-// decodeMSISDN accepts the common MSISDN encodings seen on Sh:
-// bare TBCD digits, TBCD digits prefixed with a TON/NPI octet, and the MAP
-// address-string form where a length octet precedes TON/NPI.
-func decodeMSISDN(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-
-	switch {
-	case len(b) >= 2 && looksLikeAddressTONNPI(b[1]) && int(b[0]) <= len(b)-1:
-		payload := b[2:]
-		if n := int(b[0]) - 1; n >= 0 && n < len(payload) {
-			payload = payload[:n]
-		}
-		return decodeTBCD(payload)
-	case len(b) >= 1 && looksLikeAddressTONNPI(b[0]):
-		return decodeTBCD(b[1:])
-	default:
-		return decodeTBCD(b)
-	}
-}
-
-func looksLikeAddressTONNPI(b byte) bool {
-	// GSM address TON/NPI octets carry the extension bit and typically occupy
-	// the 0x80-0xFF range, unlike normal TBCD digit pairs.
-	return b&0x80 != 0
+	return tbcd.DecodeMSISDN(b)
 }

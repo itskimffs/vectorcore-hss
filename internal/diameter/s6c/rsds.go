@@ -1,8 +1,8 @@
 package s6c
 
 import (
-	"encoding/base64"
 	"context"
+	"encoding/base64"
 	"time"
 
 	"github.com/fiorix/go-diameter/v4/diam"
@@ -46,7 +46,7 @@ func (h *Handlers) RDSMR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 		sub, err = h.store.GetSubscriberByIMSI(ctx, imsi)
 		if err == repository.ErrNotFound {
 			h.log.Warn("s6c: RSDS unknown subscriber", zap.String("imsi", imsi))
-			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), err
+			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), nil
 		}
 		if err != nil {
 			h.log.Error("s6c: RSDS store error", zap.Error(err))
@@ -56,7 +56,7 @@ func (h *Handlers) RDSMR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 		sub, err = h.store.GetSubscriberByMSISDN(ctx, userIdentifierMSISDN)
 		if err == repository.ErrNotFound {
 			h.log.Warn("s6c: RSDS unknown subscriber", zap.String("msisdn", userIdentifierMSISDN))
-			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), err
+			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), nil
 		}
 		if err != nil {
 			h.log.Error("s6c: RSDS store error", zap.Error(err))
@@ -68,7 +68,7 @@ func (h *Handlers) RDSMR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 		sub, err = h.store.GetSubscriberByIMSI(ctx, imsi)
 		if err == repository.ErrNotFound {
 			h.log.Warn("s6c: RSDS unknown subscriber", zap.String("imsi", imsi))
-			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), err
+			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), nil
 		}
 		if err != nil {
 			h.log.Error("s6c: RSDS store error", zap.Error(err))
@@ -79,7 +79,7 @@ func (h *Handlers) RDSMR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 		sub, err = h.store.GetSubscriberByMSISDN(ctx, msisdn)
 		if err == repository.ErrNotFound {
 			h.log.Warn("s6c: RSDS unknown subscriber", zap.String("msisdn", msisdn))
-			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), err
+			return avputil.ConstructFailureAnswer(msg, req.SessionID, h.originHost, h.originRealm, avputil.DiameterErrorUserUnknown), nil
 		}
 		if err != nil {
 			h.log.Error("s6c: RSDS store error", zap.Error(err))
@@ -95,6 +95,17 @@ func (h *Handlers) RDSMR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 	rdrFlags := uint32(req.RDRFlags)
 
 	outcome := parseDeliveryOutcome(msg)
+	switch outcome.Status {
+	case deliveryOutcomeMalformed, deliveryOutcomeUnknownCause:
+		// Fail-safe: handled as AbsentUser below, so a real failure still gets
+		// MWD and an alert; a misread success only costs one unneeded ALR.
+		h.log.Warn("s6c: RSDS SM-Delivery-Outcome unusable — treating as AbsentUser",
+			zap.String("imsi", imsi),
+			zap.String("sc_addr", decodeMSISDN(req.SCAddress)),
+			zap.String("sc_origin_host", string(req.OriginHost)),
+			zap.Stringer("outcome_status", outcome.Status),
+			zap.String("problem", outcome.Problem))
+	}
 
 	// SuccessfulTransfer — clear MWD, no notification needed.
 	if outcome.Cause == SMDeliveryCauseSuccessfulTransfer {
@@ -135,14 +146,11 @@ func (h *Handlers) RDSMR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 
 	// Absent or memory-full — store MWD with the appropriate status flags.
 	var statusFlags uint32
-	var mwdStatusBit uint32
 	switch outcome.Cause {
 	case SMDeliveryCauseMemoryCapacityExceeded:
 		statusFlags = MWDStatusMCEF
-		mwdStatusBit = MWDStatusMCEF
-	default: // AbsentUser or no outcome present
+	default: // AbsentUser, no outcome, or an unusable outcome (see parseDeliveryOutcome)
 		statusFlags = MWDStatusMNRF
-		mwdStatusBit = MWDStatusMNRF
 	}
 
 	mwd := &models.MessageWaitingData{
@@ -169,61 +177,11 @@ func (h *Handlers) RDSMR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 
 	ans := avputil.ConstructSuccessAnswer(msg, req.SessionID, h.originHost, h.originRealm, AppIDS6c)
 	appendUserIdentifier(ans, imsi, sub.MSISDN)
-	ans.NewAVP(avpMWDStatus, avp.Vbit, Vendor3GPP, datatype.Unsigned32(mwdStatusBit))
+	// Report the subscriber's MWD status after this update, not just the
+	// flag set by this request: e.g. MCEF held for another SMS-SC stays set.
+	ans.NewAVP(avpMWDStatus, avp.Vbit, Vendor3GPP,
+		datatype.Unsigned32(rsdsMWDStatus(records, scAddr, statusFlags)))
 	return ans, nil
-}
-
-// parseDeliveryOutcome extracts the SM-Delivery-Cause from the SM-Delivery-Outcome
-// grouped AVP (code 3316, vendor 10415). It checks each node-specific sub-AVP
-// (MME, SGSN, MSC, IP-SM-GW) and returns the first cause found.
-// Returns Cause = -1 if the AVP is absent, which the caller treats as AbsentUser.
-func parseDeliveryOutcome(msg *diam.Message) SMDeliveryOutcomeResult {
-	outerAVP, err := msg.FindAVP(avpSMDeliveryOutcome, Vendor3GPP)
-	if err != nil {
-		return SMDeliveryOutcomeResult{Cause: -1}
-	}
-	outer, ok := outerAVP.Data.(*diam.GroupedAVP)
-	if !ok {
-		return SMDeliveryOutcomeResult{Cause: -1}
-	}
-
-	// Each node-outcome sub-AVP (MME/SGSN/MSC/IP-SM-GW) is itself grouped,
-	// containing SM-Delivery-Cause and optionally Absent-User-Diagnostic-SM.
-	nodeOutcomeCodes := []uint32{
-		avpMMEDeliveryOutcome,
-		avpSGSNDeliveryOutcome,
-		// MSC (3319) and IP-SM-GW (3320) not declared as named consts but share same structure
-		uint32(3319),
-		uint32(3320),
-	}
-	for _, sub := range outer.AVP {
-		for _, code := range nodeOutcomeCodes {
-			if sub.Code != code {
-				continue
-			}
-			nodeGrouped, ok := sub.Data.(*diam.GroupedAVP)
-			if !ok {
-				continue
-			}
-			result := SMDeliveryOutcomeResult{Cause: -1}
-			for _, inner := range nodeGrouped.AVP {
-				switch inner.Code {
-				case avpSMDeliveryCause:
-					if v, ok := inner.Data.(datatype.Enumerated); ok {
-						result.Cause = int32(v)
-					}
-				case avpAbsentUserDiagnosticSM:
-					if v, ok := inner.Data.(datatype.Unsigned32); ok {
-						result.AbsentUserDiagnostic = uint32(v)
-					}
-				}
-			}
-			if result.Cause != -1 {
-				return result
-			}
-		}
-	}
-	return SMDeliveryOutcomeResult{Cause: -1}
 }
 
 func uint32Ptr(v uint32) *uint32 {

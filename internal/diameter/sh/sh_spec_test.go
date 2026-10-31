@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fiorix/go-diameter/v4/diam"
 	"github.com/fiorix/go-diameter/v4/diam/avp"
@@ -28,13 +29,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestUDR_MSISDNWithAddressHeaderReturnsSubscriberData(t *testing.T) {
+func TestUDR_LegacyPrefixedMSISDNReturnsSubscriberData(t *testing.T) {
 	store := newShStore()
 	store.addIMSSubscriber(&models.IMSSubscriber{
 		MSISDN: "12345678901",
 		IMSI:   ptr("001010123456789"),
 	})
-	h := newShTestHandlers(store)
+	h := newShTestHandlersWithEncoding(store, config.MSISDNEncodingLegacyPrefixed)
 
 	req := buildUDRByMSISDN([]byte{0x07, 0x91, 0x21, 0x43, 0x65, 0x87, 0x09, 0xF1}, DataReferenceMSISDN)
 	ans, err := h.UDR(nil, req)
@@ -54,6 +55,72 @@ func TestUDR_MSISDNWithAddressHeaderReturnsSubscriberData(t *testing.T) {
 	userData := string(userDataAVP.Data.(datatype.OctetString))
 	if !strings.Contains(userData, "<MSISDN>12345678901</MSISDN>") {
 		t.Fatalf("User-Data missing normalized MSISDN, got %q", userData)
+	}
+}
+
+// TS 29.329 §6.3.2: the User-Identity MSISDN is bare TBCD with no
+// nature-of-address prefix.
+func TestUDR_MSISDNPlainTBCD(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		encoding string
+		msisdn   []byte
+		want     string
+	}{
+		// Second digit 8/9 used to be stripped as a TON/NPI octet.
+		{"country code 98", config.MSISDNEncodingTBCD, []byte{0x89, 0x19, 0x00, 0x00, 0x50, 0x55}, "989100000555"},
+		{"country code 49", config.MSISDNEncodingTBCD, []byte{0x94, 0x51, 0x23, 0x45, 0x67, 0x00}, "491532547600"},
+		// Used to be read as length|TON/NPI and truncated to empty.
+		{"first octet looks like a length", config.MSISDNEncodingTBCD, []byte{0x01, 0x85, 0x00, 0x00, 0x00, 0x10}, "105800000001"},
+		{"odd length with filler", config.MSISDNEncodingTBCD, []byte{0x33, 0x24, 0x10, 0x82, 0xF3}, "334201283"},
+		// The prefixed form is not guessed in tbcd mode.
+		{"prefixed form read as digits", config.MSISDNEncodingTBCD, []byte{0x07, 0x81, 0x89, 0x19, 0x00, 0x00, 0x50, 0x55}, "7018989100000555"},
+		// legacy_prefixed falls back to bare TBCD when the prefix does not match.
+		{"legacy fallback, country code 98", config.MSISDNEncodingLegacyPrefixed, []byte{0x89, 0x19, 0x00, 0x00, 0x50, 0x55}, "989100000555"},
+		{"legacy fallback, length mismatch", config.MSISDNEncodingLegacyPrefixed, []byte{0x01, 0x85, 0x00, 0x00, 0x00, 0x10}, "105800000001"},
+		{"legacy prefixed, NOA unknown", config.MSISDNEncodingLegacyPrefixed, []byte{0x07, 0x81, 0x89, 0x19, 0x00, 0x00, 0x50, 0x55}, "989100000555"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newShStore()
+			store.addIMSSubscriber(&models.IMSSubscriber{MSISDN: tc.want, IMSI: ptr("001010123456789")})
+			h := newShTestHandlersWithEncoding(store, tc.encoding)
+
+			ans, err := h.UDR(nil, buildUDRByMSISDN(tc.msisdn, DataReferenceMSISDN))
+			if err != nil {
+				t.Fatalf("UDR returned error: %v", err)
+			}
+			requireResultCode(t, ans, diam.Success)
+			if got := store.msisdnLookups; len(got) == 0 || got[0] != tc.want {
+				t.Fatalf("MSISDN lookups = %v, want first %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUDR_InvalidMSISDNReturnsUserUnknownWithoutLookup(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		encoding string
+		msisdn   []byte
+	}{
+		{"invalid nibble", config.MSISDNEncodingTBCD, []byte{0x3A, 0x24}},
+		{"filler before final octet", config.MSISDNEncodingTBCD, []byte{0xF3, 0x24}},
+		{"legacy, invalid nibble", config.MSISDNEncodingLegacyPrefixed, []byte{0x3A, 0x24}},
+		{"legacy, prefix with invalid digits", config.MSISDNEncodingLegacyPrefixed, []byte{0x03, 0x91, 0x3A, 0x24}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newShStore()
+			h := newShTestHandlersWithEncoding(store, tc.encoding)
+
+			ans, err := h.UDR(nil, buildUDRByMSISDN(tc.msisdn, DataReferenceMSISDN))
+			if err != nil {
+				t.Fatalf("UDR returned error: %v", err)
+			}
+			requireExperimentalResultCode(t, ans, DiameterErrorUserUnknown)
+			if len(store.msisdnLookups) != 0 {
+				t.Fatalf("MSISDN lookups = %v, want none", store.msisdnLookups)
+			}
+		})
 	}
 }
 
@@ -106,7 +173,12 @@ func TestSendPNRStoresPendingSessionUntilPNA(t *testing.T) {
 }
 
 func newShTestHandlers(store repository.Repository) *Handlers {
+	return newShTestHandlersWithEncoding(store, config.MSISDNEncodingTBCD)
+}
+
+func newShTestHandlersWithEncoding(store repository.Repository, encoding string) *Handlers {
 	cfg := &config.Config{}
+	cfg.Sh.MSISDNEncoding = encoding
 	cfg.HSS.OriginHost = "hss.test.net"
 	cfg.HSS.OriginRealm = "test.net"
 	cfg.HSS.MCC = "001"
@@ -318,8 +390,11 @@ func (s *shStore) GetMWDForIMSI(_ context.Context, _ string) ([]models.MessageWa
 	return nil, nil
 }
 func (s *shStore) DeleteMWD(_ context.Context, _, _ string) error { return nil }
-func (s *shStore) InvalidateCache(_ string)                       {}
-func (s *shStore) InvalidateAPNCache(_ int)                       {}
+func (s *shStore) ListMWDDueForAlertRetry(_ context.Context, _ time.Time, _ int) ([]models.MessageWaitingData, error) {
+	return nil, nil
+}
+func (s *shStore) InvalidateCache(_ string) {}
+func (s *shStore) InvalidateAPNCache(_ int) {}
 func (s *shStore) ListAllAUC(_ context.Context) ([]models.AUC, error) {
 	return nil, nil
 }
