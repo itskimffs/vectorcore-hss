@@ -9,6 +9,9 @@ import (
 
 var ErrNotFound = errorString("not found")
 
+// ErrConflict means another writer changed the same row at the same time.
+var ErrConflict = errorString("conflict")
+
 type errorString string
 
 func (e errorString) Error() string { return string(e) }

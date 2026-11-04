@@ -274,6 +274,8 @@ func NewServer(cfg *config.Config, store repository.Repository, log *zap.Logger)
 		swxH.PPA(conn, msg)
 	}))
 	machine.HandleFunc("UDR", wrap("UDR", shH.UDR))
+	// Sh Profile-Update. Not "PUR", which go-diameter takes as S6a Purge-UE.
+	machine.HandleIdx(diam.CommandIndex{AppID: sh.AppIDSh, Code: 307, Request: true}, diam.HandlerFunc(wrap("Sh-PUR", shH.PUR)))
 	machine.HandleFunc("PNA", func(conn diam.Conn, msg *diam.Message) {
 		shH.PNA(conn, msg)
 	})

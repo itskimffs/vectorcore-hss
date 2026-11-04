@@ -724,7 +724,19 @@ func (s *Store) UpsertIMSSubscriber(ctx context.Context, rec *models.IMSSubscrib
 }
 
 func (s *Store) DeleteIMSSubscriberByMSISDN(ctx context.Context, msisdn string) error {
-	return s.db.WithContext(ctx).Where("msisdn = ?", msisdn).Delete(&models.IMSSubscriber{}).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var sub models.IMSSubscriber
+		if err := tx.Where("msisdn = ?", msisdn).First(&sub).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		if err := tx.Where("ims_subscriber_id = ?", sub.IMSSubscriberID).Delete(&models.ShRepositoryData{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&sub).Error
+	})
 }
 
 func (s *Store) UpsertEIR(ctx context.Context, rec *models.EIR) error {

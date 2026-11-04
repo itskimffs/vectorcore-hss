@@ -332,6 +332,24 @@ type IMSSubscriber struct {
 
 func (IMSSubscriber) TableName() string { return "ims_subscriber" }
 
+// ── SH_REPOSITORY_DATA ────────────────────────────────────────────────────────
+
+// ShRepositoryData is transparent data that an Application Server stores in
+// the HSS over Sh (3GPP TS 29.328 §7.6.1), one row per IMS subscriber and
+// Service-Indication. ServiceData holds the XML inside the ServiceData element
+// as the AS sent it, for example the simservs document for "MMTEL-Services"
+// (TS 29.364 §7.2.0).
+type ShRepositoryData struct {
+	ShRepositoryDataID int       `gorm:"column:sh_repository_data_id;primaryKey;autoIncrement" json:"sh_repository_data_id,omitempty"`
+	IMSSubscriberID    int       `gorm:"column:ims_subscriber_id;not null;uniqueIndex:idx_sh_repository_data,priority:1" json:"ims_subscriber_id"`
+	ServiceIndication  string    `gorm:"column:service_indication;size:255;not null;uniqueIndex:idx_sh_repository_data,priority:2" json:"service_indication"`
+	SequenceNumber     int       `gorm:"column:sequence_number;not null" json:"sequence_number"`
+	ServiceData        string    `gorm:"column:service_data;type:text;not null" json:"service_data"`
+	LastModified       time.Time `gorm:"column:last_modified" json:"last_modified"`
+}
+
+func (ShRepositoryData) TableName() string { return "sh_repository_data" }
+
 // ── IFC_PROFILE ───────────────────────────────────────────────────────────────
 
 type IFCProfile struct {
@@ -514,6 +532,6 @@ func AllModels() []interface{} {
 		&EmergencySubscriber{}, &ChargingRule{},
 		&TFT{}, &EIR{}, &IMSIIMEIHistory{}, &SubscriberAttribute{},
 		&OperationLog{}, &IFCProfile{}, &TACModel{},
-		&ServingPDUSession{}, &MessageWaitingData{},
+		&ServingPDUSession{}, &MessageWaitingData{}, &ShRepositoryData{},
 	}
 }
