@@ -53,6 +53,26 @@ func registerIMSSubscriberRoutes(s *Server, api huma.API) {
 	huma.Register(api, huma.Operation{OperationID: "get-ims-subscriber-by-imsi", Method: http.MethodGet, Path: "/ims_subscriber/imsi/{imsi}", Summary: "Get IMS Subscriber by IMSI", Tags: []string{"IMS Subscriber"}}, s.getIMSSubscriberByIMSI)
 	huma.Register(api, huma.Operation{OperationID: "update-ims-subscriber", Method: http.MethodPut, Path: "/ims_subscriber/{id}", Summary: "Update IMS Subscriber", Tags: []string{"IMS Subscriber"}}, s.updateIMSSubscriber)
 	huma.Register(api, huma.Operation{OperationID: "delete-ims-subscriber", Method: http.MethodDelete, Path: "/ims_subscriber/{id}", Summary: "Delete IMS Subscriber", Tags: []string{"IMS Subscriber"}}, s.deleteIMSSubscriber)
+	huma.Register(api, huma.Operation{OperationID: "list-ims-subscriber-repository-data", Method: http.MethodGet, Path: "/ims_subscriber/{id}/repository_data", Summary: "List Sh repository data of an IMS Subscriber",
+		Description: "The transparent data that Application Servers have stored over Sh (TS 29.328 §7.6.1), one entry per Service-Indication. Read only: it is written by the AS with Sh PUR.", Tags: []string{"IMS Subscriber"}}, s.listIMSSubscriberRepositoryData)
+}
+
+type IMSSubscriberRepositoryDataOutput struct {
+	Body []models.ShRepositoryData
+}
+
+func (s *Server) listIMSSubscriberRepositoryData(ctx context.Context, input *IMSSubscriberIDInput) (*IMSSubscriberRepositoryDataOutput, error) {
+	if err := s.db.WithContext(ctx).First(&models.IMSSubscriber{}, input.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, huma.Error404NotFound("not found", err)
+		}
+		return nil, huma.Error500InternalServerError("db error", err)
+	}
+	rows := []models.ShRepositoryData{}
+	if err := s.db.WithContext(ctx).Where("ims_subscriber_id = ?", input.ID).Order("service_indication").Find(&rows).Error; err != nil {
+		return nil, huma.Error500InternalServerError("db error", err)
+	}
+	return &IMSSubscriberRepositoryDataOutput{Body: rows}, nil
 }
 
 func (s *Server) listIMSSubscribers(ctx context.Context, input *IMSSubscriberListInput) (*IMSSubscriberListOutput, error) {
@@ -180,7 +200,13 @@ func (s *Server) deleteIMSSubscriber(ctx context.Context, input *IMSSubscriberID
 		}
 		return nil, huma.Error500InternalServerError("db error", err)
 	}
-	if err := s.db.WithContext(ctx).Delete(&item).Error; err != nil {
+	// The subscriber's Sh repository data goes with it.
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("ims_subscriber_id = ?", item.IMSSubscriberID).Delete(&models.ShRepositoryData{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&item).Error
+	}); err != nil {
 		return nil, huma.Error500InternalServerError("db error", err)
 	}
 	if s.geored != nil {

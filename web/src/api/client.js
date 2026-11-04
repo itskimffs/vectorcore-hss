@@ -78,6 +78,7 @@ export const getIMSSubscribers = ({ search = '', limit = 0, offset = 0 } = {}) =
 export const createIMSSubscriber = (data) => request('POST', '/ims_subscriber', data)
 export const updateIMSSubscriber = (id, data) => request('PUT', `/ims_subscriber/${id}`, data)
 export const deleteIMSSubscriber = (id) => request('DELETE', `/ims_subscriber/${id}`)
+export const getIMSSubscriberRepositoryData = (id) => request('GET', `/ims_subscriber/${id}/repository_data`)
 
 // IFC Profiles
 export const getIFCProfiles = () => request('GET', '/ims_subscriber/ifc_profile')

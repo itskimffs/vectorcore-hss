@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Search, RefreshCw, Phone, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, RefreshCw, Phone, ChevronUp, ChevronDown, ChevronsUpDown, Database } from 'lucide-react'
 import { useSort } from '../hooks/useSort.js'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll.js'
 import Spinner from '../components/Spinner.jsx'
@@ -11,7 +11,7 @@ import { useDirtyState } from '../hooks/useDirtyState.js'
 import { useConfirmClose } from '../hooks/useConfirmClose.js'
 import {
   getIMSSubscribers, createIMSSubscriber, updateIMSSubscriber, deleteIMSSubscriber,
-  getSubscribers, getIFCProfiles,
+  getSubscribers, getIFCProfiles, getIMSSubscriberRepositoryData,
 } from '../api/client.js'
 import IFCProfiles from './IFCProfiles.jsx'
 
@@ -37,6 +37,90 @@ const SECTION_STYLE = {
   marginTop: 16,
   borderBottom: '1px solid var(--border-subtle)',
   paddingBottom: 4,
+}
+
+// prettyXML indents an XML fragment for reading. It returns the text as it is
+// when it does not parse.
+function prettyXML(src) {
+  try {
+    const doc = new DOMParser().parseFromString(`<root>${src}</root>`, 'application/xml')
+    if (doc.getElementsByTagName('parsererror').length) return src
+    const lines = []
+    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const walk = (node, depth) => {
+      const pad = '  '.repeat(depth)
+      if (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.CDATA_SECTION_NODE) {
+        const t = node.nodeValue.trim()
+        if (t) lines.push(pad + esc(t))
+        return
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return
+      const attrs = Array.from(node.attributes).map(a => ` ${a.name}="${esc(a.value).replace(/"/g, '&quot;')}"`).join('')
+      const kids = Array.from(node.childNodes).filter(n => n.nodeType === Node.ELEMENT_NODE || (n.nodeValue || '').trim())
+      if (kids.length === 0) {
+        lines.push(`${pad}<${node.nodeName}${attrs}/>`)
+      } else if (kids.length === 1 && kids[0].nodeType !== Node.ELEMENT_NODE) {
+        lines.push(`${pad}<${node.nodeName}${attrs}>${esc(kids[0].nodeValue.trim())}</${node.nodeName}>`)
+      } else {
+        lines.push(`${pad}<${node.nodeName}${attrs}>`)
+        kids.forEach(k => walk(k, depth + 1))
+        lines.push(`${pad}</${node.nodeName}>`)
+      }
+    }
+    Array.from(doc.documentElement.childNodes).forEach(n => walk(n, 0))
+    return lines.join('\n')
+  } catch {
+    return src
+  }
+}
+
+// RepositoryDataModal shows the Sh repository data that Application Servers
+// have stored for an IMS subscriber. It is read only: the AS writes it with
+// Sh PUR, and an edit here would put the AS out of sync.
+function RepositoryDataModal({ row, onClose }) {
+  const [entries, setEntries] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let active = true
+    getIMSSubscriberRepositoryData(row.ims_subscriber_id)
+      .then(d => { if (active) setEntries(Array.isArray(d) ? d : []) })
+      .catch(err => { if (active) setError(err.message || 'Failed to load') })
+    return () => { active = false }
+  }, [row.ims_subscriber_id])
+
+  return (
+    <Modal title={`Sh Repository Data — ${row.msisdn}`} onClose={onClose} size="lg">
+      <div className="modal-body">
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: 12 }}>
+          Transparent data stored by Application Servers over Sh (TS 29.328), one entry per Service-Indication.
+          It is written by the AS with Sh PUR and is read only here.
+        </div>
+        {error && <div className="error-state">{error}</div>}
+        {!error && entries === null && <div className="loading-center"><Spinner /> <span>Loading...</span></div>}
+        {!error && entries !== null && entries.length === 0 && (
+          <div className="empty-state">No repository data stored for this subscriber.</div>
+        )}
+        {!error && entries !== null && entries.map(e => (
+          <div key={e.sh_repository_data_id} style={{ marginBottom: 16 }}>
+            <div style={SECTION_STYLE}>{e.service_indication}</div>
+            <div style={{ display: 'flex', gap: 24, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 8 }}>
+              <span>Sequence number <span className="mono" style={{ color: 'var(--text)' }}>{e.sequence_number}</span></span>
+              <span>Last modified <span style={{ color: 'var(--text)' }}>{e.last_modified ? new Date(e.last_modified).toLocaleString() : '—'}</span></span>
+            </div>
+            <pre className="mono" style={{
+              margin: 0, padding: 10, maxHeight: 360, overflow: 'auto', fontSize: '0.75rem', lineHeight: 1.5,
+              background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+              whiteSpace: 'pre', color: 'var(--text)',
+            }}>{prettyXML(e.service_data)}</pre>
+          </div>
+        ))}
+      </div>
+      <div className="modal-footer">
+        <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  )
 }
 
 function IMSModal({ row, onClose, onSaved, subscriberList, ifcProfiles }) {
@@ -197,6 +281,7 @@ export default function IMSSubscribers() {
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(null)
   const [delConfirm, setDelConfirm] = useState(null)
+  const [repoView, setRepoView] = useState(null)
   const [deleting, setDeleting] = useState(null)
   const [subscriberList, setSubscriberList] = useState([])
   const [ifcProfiles, setIfcProfiles] = useState([])
@@ -314,6 +399,7 @@ export default function IMSSubscribers() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 4 }}>
+                        <button className="btn-icon" title="Sh repository data" onClick={() => setRepoView(row)}><Database size={13} /></button>
                         <button className="btn-icon" title="Edit" onClick={() => setModal({ row })}><Pencil size={13} /></button>
                         <button className="btn-icon danger" title="Delete" onClick={() => setDelConfirm(row)}><Trash2 size={13} /></button>
                       </div>
@@ -330,10 +416,12 @@ export default function IMSSubscribers() {
         {modal === 'add' && <IMSModal onClose={() => setModal(null)} onSaved={refresh} subscriberList={subscriberList} ifcProfiles={ifcProfiles} />}
         {modal && modal.row && <IMSModal row={modal.row} onClose={() => setModal(null)} onSaved={refresh} subscriberList={subscriberList} ifcProfiles={ifcProfiles} />}
 
+        {repoView && <RepositoryDataModal row={repoView} onClose={() => setRepoView(null)} />}
+
         {delConfirm && (
           <Modal title="Delete IMS Subscriber" onClose={() => setDelConfirm(null)}>
             <div className="modal-body">
-              <p>Delete IMS subscriber <strong>{delConfirm.msisdn}</strong>? This cannot be undone.</p>
+              <p>Delete IMS subscriber <strong>{delConfirm.msisdn}</strong> and its Sh repository data? This cannot be undone.</p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-ghost" onClick={() => setDelConfirm(null)}>Cancel</button>
