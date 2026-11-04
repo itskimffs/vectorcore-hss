@@ -202,6 +202,7 @@ func (s *Server) registerRoutes(api huma.API) {
 	registerAlgorithmProfileRoutes(s, api)
 	registerSubscriberRoutes(s, api)
 	registerIMSSubscriberRoutes(s, api)
+	registerRepositoryDataRoutes(s, api)
 	registerIFCProfileRoutes(s, api)
 	registerEIRRoutes(s, api)
 	registerEIRHistoryRoutes(s, api)

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, lazy, Suspense } from 'react'
 import { Plus, Pencil, Trash2, Search, RefreshCw, Phone, ChevronUp, ChevronDown, ChevronsUpDown, Database } from 'lucide-react'
 import { useSort } from '../hooks/useSort.js'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll.js'
@@ -12,8 +12,11 @@ import { useConfirmClose } from '../hooks/useConfirmClose.js'
 import {
   getIMSSubscribers, createIMSSubscriber, updateIMSSubscriber, deleteIMSSubscriber,
   getSubscribers, getIFCProfiles, getIMSSubscriberRepositoryData,
+  putIMSSubscriberRepositoryData, deleteIMSSubscriberRepositoryData,
 } from '../api/client.js'
 import IFCProfiles from './IFCProfiles.jsx'
+
+const IFCCodeEditor = lazy(() => import('../components/IFCCodeEditor.jsx'))
 
 const TAB_STYLE = (active) => ({
   padding: '6px 16px',
@@ -74,49 +77,168 @@ function prettyXML(src) {
   }
 }
 
+const MAX_SEQUENCE = 65535
+const nextSequence = n => (n % MAX_SEQUENCE) + 1
+
+function validateServiceData(value) {
+  if (!value.trim()) return { valid: false, message: 'Service data is required.' }
+  if (value.trim().startsWith('<?xml')) return { valid: false, message: 'Leave out the XML declaration.' }
+  try {
+    const doc = new DOMParser().parseFromString(`<ServiceData>${value}</ServiceData>`, 'application/xml')
+    const err = doc.querySelector('parsererror')
+    if (!err) return { valid: true, message: '' }
+    return { valid: false, message: (err.textContent || '').replace(/\s+/g, ' ').trim() || 'The XML is not well-formed.' }
+  } catch {
+    return { valid: false, message: 'Unable to check the XML in this browser.' }
+  }
+}
+
+// RepositoryDataEditor changes or adds one Service-Indication. It sends the
+// Sequence-Number it read, so a change the AS made in the meantime is refused
+// instead of overwritten.
+function RepositoryDataEditor({ row, entry, existing, onDone, onCancel }) {
+  const toast = useToast()
+  const isNew = !entry
+  const [si, setSi] = useState(isNew ? (existing.includes('MMTEL-Services') ? '' : 'MMTEL-Services') : entry.service_indication)
+  const [seq, setSeq] = useState(String(isNew ? 0 : nextSequence(entry.sequence_number)))
+  const [data, setData] = useState(isNew ? '' : prettyXML(entry.service_data))
+  const [saving, setSaving] = useState(false)
+  const validation = validateServiceData(data)
+  const seqNum = Number(seq)
+  const seqValid = seq !== '' && Number.isInteger(seqNum) && seqNum >= 0 && seqNum <= MAX_SEQUENCE
+
+  async function save() {
+    if (!si.trim()) { toast.error('Validation', 'Service-Indication is required'); return }
+    if (isNew && existing.includes(si.trim())) { toast.error('Validation', `${si.trim()} already exists — edit it instead`); return }
+    if (!seqValid) { toast.error('Validation', `Sequence number must be 0 to ${MAX_SEQUENCE}`); return }
+    if (!validation.valid) { toast.error('Validation', validation.message); return }
+    setSaving(true)
+    try {
+      await putIMSSubscriberRepositoryData(row.ims_subscriber_id, si.trim(), {
+        service_data: data,
+        sequence_number: seqNum,
+        expected_sequence_number: isNew ? -1 : entry.sequence_number,
+      })
+      toast.success('Saved', `${si.trim()} saved with sequence number ${seqNum}`)
+      onDone()
+    } catch (err) {
+      toast.error('Save failed', err.message)
+      if (/changed|removed/.test(err.message)) onDone()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={SECTION_STYLE}>{isNew ? 'Add Service-Indication' : `Edit ${entry.service_indication}`}</div>
+      <div className="form-row">
+        <div className="form-group">
+          <label className="form-label">Service-Indication</label>
+          <input className="input mono" value={si} onChange={e => setSi(e.target.value)} readOnly={!isNew} placeholder="MMTEL-Services" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Sequence number</label>
+          <input className="input mono" type="number" min={0} max={MAX_SEQUENCE} value={seq} onChange={e => setSeq(e.target.value)} />
+        </div>
+      </div>
+      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 8 }}>
+        {isNew
+          ? 'New data normally starts at 0. The AS must then send 1 in its next update.'
+          : `Now ${entry.sequence_number}. The AS must send this number plus one in its next update. It is not told about this change: its next update gets out of sync (5105) and it has to read the data again.`}
+      </div>
+      <Suspense fallback={<div className="loading-center"><Spinner /></div>}>
+        <IFCCodeEditor value={data} onChange={setData} validation={validation} rows={14} />
+      </Suspense>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+        <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>
+          {saving ? <Spinner size="sm" /> : null} Save
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // RepositoryDataModal shows the Sh repository data that Application Servers
-// have stored for an IMS subscriber. It is read only: the AS writes it with
-// Sh PUR, and an edit here would put the AS out of sync.
+// have stored for an IMS subscriber, and lets an operator change, add or
+// remove it.
 function RepositoryDataModal({ row, onClose }) {
+  const toast = useToast()
   const [entries, setEntries] = useState(null)
   const [error, setError] = useState(null)
+  const [editing, setEditing] = useState(null) // null, 'new' or a Service-Indication
+  const [deleting, setDeleting] = useState(null)
 
-  useEffect(() => {
-    let active = true
+  function load() {
+    setError(null)
     getIMSSubscriberRepositoryData(row.ims_subscriber_id)
-      .then(d => { if (active) setEntries(Array.isArray(d) ? d : []) })
-      .catch(err => { if (active) setError(err.message || 'Failed to load') })
-    return () => { active = false }
-  }, [row.ims_subscriber_id])
+      .then(d => setEntries(Array.isArray(d) ? d : []))
+      .catch(err => setError(err.message || 'Failed to load'))
+  }
+  useEffect(load, [row.ims_subscriber_id])
+
+  async function remove(e) {
+    try {
+      await deleteIMSSubscriberRepositoryData(row.ims_subscriber_id, e.service_indication, e.sequence_number)
+      toast.success('Deleted', `${e.service_indication} deleted`)
+    } catch (err) {
+      toast.error('Delete failed', err.message)
+    }
+    setDeleting(null)
+    load()
+  }
+
+  const done = () => { setEditing(null); load() }
+  const existing = (entries || []).map(e => e.service_indication)
 
   return (
     <Modal title={`Sh Repository Data — ${row.msisdn}`} onClose={onClose} size="lg">
       <div className="modal-body">
         <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: 12 }}>
-          Transparent data stored by Application Servers over Sh (TS 29.328), one entry per Service-Indication.
-          It is written by the AS with Sh PUR and is read only here.
+          Transparent data that Application Servers store over Sh (TS 29.328), one entry per Service-Indication.
+          The AS writes it with Sh PUR. A change here is not sent to the AS.
         </div>
         {error && <div className="error-state">{error}</div>}
         {!error && entries === null && <div className="loading-center"><Spinner /> <span>Loading...</span></div>}
-        {!error && entries !== null && entries.length === 0 && (
+        {!error && entries !== null && entries.length === 0 && editing !== 'new' && (
           <div className="empty-state">No repository data stored for this subscriber.</div>
         )}
         {!error && entries !== null && entries.map(e => (
-          <div key={e.sh_repository_data_id} style={{ marginBottom: 16 }}>
-            <div style={SECTION_STYLE}>{e.service_indication}</div>
-            <div style={{ display: 'flex', gap: 24, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 8 }}>
-              <span>Sequence number <span className="mono" style={{ color: 'var(--text)' }}>{e.sequence_number}</span></span>
-              <span>Last modified <span style={{ color: 'var(--text)' }}>{e.last_modified ? new Date(e.last_modified).toLocaleString() : '—'}</span></span>
+          editing === e.service_indication ? (
+            <RepositoryDataEditor key={e.sh_repository_data_id} row={row} entry={e} existing={existing} onDone={done} onCancel={() => setEditing(null)} />
+          ) : (
+            <div key={e.sh_repository_data_id} style={{ marginBottom: 16 }}>
+              <div style={{ ...SECTION_STYLE, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>{e.service_indication}</span>
+                <span style={{ display: 'flex', gap: 4, textTransform: 'none', letterSpacing: 0 }}>
+                  {deleting === e.service_indication ? (<>
+                    <button type="button" className="btn btn-danger" style={{ padding: '2px 10px' }} onClick={() => remove(e)}>Delete {e.service_indication}</button>
+                    <button type="button" className="btn btn-ghost" style={{ padding: '2px 10px' }} onClick={() => setDeleting(null)}>Cancel</button>
+                  </>) : (<>
+                    <button type="button" className="btn-icon" title="Edit" disabled={editing !== null} onClick={() => setEditing(e.service_indication)}><Pencil size={13} /></button>
+                    <button type="button" className="btn-icon danger" title="Delete" disabled={editing !== null} onClick={() => setDeleting(e.service_indication)}><Trash2 size={13} /></button>
+                  </>)}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 24, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 8 }}>
+                <span>Sequence number <span className="mono" style={{ color: 'var(--text)' }}>{e.sequence_number}</span></span>
+                <span>Last modified <span style={{ color: 'var(--text)' }}>{e.last_modified ? new Date(e.last_modified).toLocaleString() : '—'}</span></span>
+              </div>
+              <pre className="mono" style={{
+                margin: 0, padding: 10, maxHeight: 360, overflow: 'auto', fontSize: '0.75rem', lineHeight: 1.5,
+                background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+                whiteSpace: 'pre', color: 'var(--text)',
+              }}>{prettyXML(e.service_data)}</pre>
             </div>
-            <pre className="mono" style={{
-              margin: 0, padding: 10, maxHeight: 360, overflow: 'auto', fontSize: '0.75rem', lineHeight: 1.5,
-              background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-              whiteSpace: 'pre', color: 'var(--text)',
-            }}>{prettyXML(e.service_data)}</pre>
-          </div>
+          )
         ))}
+        {editing === 'new' && <RepositoryDataEditor row={row} existing={existing} onDone={done} onCancel={() => setEditing(null)} />}
       </div>
       <div className="modal-footer">
+        <button type="button" className="btn btn-ghost" onClick={() => setEditing('new')} disabled={editing !== null || entries === null}>
+          <Plus size={14} /> Add Service-Indication
+        </button>
         <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
       </div>
     </Modal>

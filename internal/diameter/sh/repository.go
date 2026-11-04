@@ -30,7 +30,7 @@ import (
 
 // MaxServiceData is the most service data the HSS accepts for one
 // Service-Indication. More gives DIAMETER_ERROR_TOO_MUCH_DATA.
-const MaxServiceData = 64 << 10
+const MaxServiceData = models.MaxShServiceData
 
 // RepositoryDataStore is implemented by the PostgreSQL store.
 type RepositoryDataStore interface {
@@ -236,7 +236,7 @@ func (h *Handlers) PUR(_ diam.Conn, msg *diam.Message) (*diam.Message, error) {
 				}
 				return &models.ShRepositoryData{SequenceNumber: 0, ServiceData: *data}, nil
 			}
-			if seq == 0 || seq-1 != cur.SequenceNumber%65535 {
+			if seq == 0 || seq-1 != cur.SequenceNumber%models.MaxShSequenceNumber {
 				return nil, resultError(DiameterErrorTransparentDataOutOfSync)
 			}
 			if data == nil {
@@ -291,7 +291,7 @@ func parseRepositoryUpdate(msg *diam.Message) (*repositoryDataElem, error) {
 	rd := doc.RepositoryData[0]
 	rd.ServiceIndication = strings.TrimSpace(rd.ServiceIndication)
 	if rd.ServiceIndication == "" || len(rd.ServiceIndication) > 255 || rd.SequenceNumber == nil ||
-		*rd.SequenceNumber < 0 || *rd.SequenceNumber > 65535 {
+		*rd.SequenceNumber < 0 || *rd.SequenceNumber > models.MaxShSequenceNumber {
 		return nil, resultError(DiameterErrorUserDataNotRecognized)
 	}
 	if rd.ServiceData != nil && len(rd.ServiceData.Inner) > MaxServiceData {
