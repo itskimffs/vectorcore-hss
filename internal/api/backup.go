@@ -34,6 +34,7 @@ type BackupDocument struct {
 	SubscriberRouting    []models.SubscriberRouting   `json:"subscriber_routing"`
 	SubscriberAttributes []models.SubscriberAttribute `json:"subscriber_attributes"`
 	IMSSubscribers       []models.IMSSubscriber       `json:"ims_subscribers"`
+	ShRepositoryData     []models.ShRepositoryData    `json:"sh_repository_data"`
 }
 
 // BackupResponse wraps BackupDocument with a Content-Disposition download header.
@@ -134,6 +135,7 @@ func buildBackup(db *gorm.DB) (*BackupDocument, error) {
 		{"subscriber_routing", &doc.SubscriberRouting},
 		{"subscriber_attributes", &doc.SubscriberAttributes},
 		{"ims_subscribers", &doc.IMSSubscribers},
+		{"sh_repository_data", &doc.ShRepositoryData},
 	} {
 		if err := db.Find(step.dest).Error; err != nil {
 			return nil, fmt.Errorf("%s: %w", step.label, err)
@@ -159,6 +161,7 @@ func applyRestore(db *gorm.DB, doc *BackupDocument) ([]RestoreTableResult, error
 		for _, w := range []wipeStep{
 			{"subscriber_attributes", &models.SubscriberAttribute{}},
 			{"subscriber_routing", &models.SubscriberRouting{}},
+			{"sh_repository_data", &models.ShRepositoryData{}},
 			{"ims_subscriber", &models.IMSSubscriber{}},
 			{"subscriber", &models.Subscriber{}},
 			{"auc", &models.AUC{}},
@@ -196,6 +199,7 @@ func applyRestore(db *gorm.DB, doc *BackupDocument) ([]RestoreTableResult, error
 			{"subscriber_routing", &doc.SubscriberRouting, len(doc.SubscriberRouting)},
 			{"subscriber_attributes", &doc.SubscriberAttributes, len(doc.SubscriberAttributes)},
 			{"ims_subscriber", &doc.IMSSubscribers, len(doc.IMSSubscribers)},
+			{"sh_repository_data", &doc.ShRepositoryData, len(doc.ShRepositoryData)},
 		} {
 			if step.count > 0 {
 				if err := tx.CreateInBatches(step.rows, 500).Error; err != nil {
@@ -226,6 +230,7 @@ func applyRestore(db *gorm.DB, doc *BackupDocument) ([]RestoreTableResult, error
 				{"subscriber_routing", "subscriber_routing_id"},
 				{"subscriber_attributes", "subscriber_attributes_id"},
 				{"ims_subscriber", "ims_subscriber_id"},
+				{"sh_repository_data", "sh_repository_data_id"},
 			} {
 				sql := fmt.Sprintf(
 					`SELECT setval(pg_get_serial_sequence('%s','%s'), COALESCE((SELECT MAX(%s) FROM %s), 1))`,

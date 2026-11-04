@@ -350,6 +350,14 @@ type ShRepositoryData struct {
 
 func (ShRepositoryData) TableName() string { return "sh_repository_data" }
 
+// MaxShServiceData is the most service data the HSS stores for one
+// Service-Indication, from Sh or from the API.
+const MaxShServiceData = 64 << 10
+
+// MaxShSequenceNumber is the highest Sh repository data Sequence-Number; the
+// one after it is 1 (TS 29.328 §6.1.2).
+const MaxShSequenceNumber = 65535
+
 // ── IFC_PROFILE ───────────────────────────────────────────────────────────────
 
 type IFCProfile struct {
