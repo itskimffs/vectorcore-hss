@@ -5,6 +5,7 @@ import (
 	"github.com/svinson1121/vectorcore-hss/internal/config"
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
 	"go.uber.org/zap"
+	"strings"
 	"sync"
 )
 
@@ -24,16 +25,28 @@ type Handlers struct {
 	// pendingPNR maps Diameter Session-ID to the original outbound request
 	// context so PNA answers can be correlated and logged accurately.
 	pendingPNR sync.Map
+	// repository is the store's repository data, nil if it has none.
+	repository RepositoryDataStore
+	// repositoryAS is hss.ShRepositoryDataAS, lower case without a trailing dot.
+	repositoryAS map[string]bool
 }
 
 func NewHandlers(cfg *config.Config, store repository.Repository, log *zap.Logger, peers PeerLookup) *Handlers {
-	return &Handlers{
-		store:       store,
-		log:         log,
-		originHost:  cfg.HSS.OriginHost,
-		originRealm: cfg.HSS.OriginRealm,
-		mcc:         cfg.HSS.MCC,
-		mnc:         cfg.HSS.MNC,
-		peers:       peers,
+	h := &Handlers{
+		store:        store,
+		log:          log,
+		originHost:   cfg.HSS.OriginHost,
+		originRealm:  cfg.HSS.OriginRealm,
+		mcc:          cfg.HSS.MCC,
+		mnc:          cfg.HSS.MNC,
+		peers:        peers,
+		repositoryAS: map[string]bool{},
 	}
+	if rs, ok := store.(RepositoryDataStore); ok {
+		h.repository = rs
+	}
+	for _, as := range cfg.HSS.ShRepositoryDataAS {
+		h.repositoryAS[strings.ToLower(strings.TrimSuffix(strings.TrimSpace(as), "."))] = true
+	}
+	return h
 }

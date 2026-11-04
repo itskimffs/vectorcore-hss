@@ -182,6 +182,10 @@ type HSSConfig struct {
 	// SLhAuthorizedRealms permits additional GMLC Diameter Origin-Realms.
 	// OriginRealm is always permitted; an empty list permits no external realm.
 	SLhAuthorizedRealms []string `yaml:"SLhAuthorizedRealms"`
+	// ShRepositoryDataAS lists the Application Servers, by Diameter Origin-Host,
+	// that may read and update Sh repository data (transparent data, Data-Reference
+	// 0 with a Service-Indication). An empty list permits none.
+	ShRepositoryDataAS []string `yaml:"ShRepositoryDataAS"`
 	MCC                 string   `yaml:"MCC"` // e.g. "311"
 	MNC                 string   `yaml:"MNC"` // e.g. "435"
 	// SCSCFPool is the list of S-CSCF URIs offered to the I-CSCF on first

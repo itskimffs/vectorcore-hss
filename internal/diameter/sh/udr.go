@@ -158,6 +158,11 @@ func (h *Handlers) UDR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	dataRef := int32(udr.DataReference)
 	switch dataRef {
 	case DataReferenceRepositoryData:
+		// With Service-Indications: repository data as in TS 29.328 §6.1.1.
+		// Without, the stored Sh profile or the IMS profile, as before.
+		if indications := serviceIndications(msg); len(indications) > 0 {
+			return h.pullRepositoryData(ctx, msg, sub, indications)
+		}
 		// If the AS previously stored an opaque blob via UDU, return it directly.
 		// Otherwise fall through and return the dynamically built IMS profile —
 		// the HSS knows the SCSCF, IMPU, and IMPI from Cx/Rx and should serve them.

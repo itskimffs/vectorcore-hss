@@ -72,8 +72,15 @@ The ULR handler on S6a detects SMS-in-MME capability from ULR-Flags and the MME-
 
 | Command | Direction | Description |
 |---------|-----------|-------------|
-| UDR / UDA | AS -> HSS | User-Data - returns Sh-Data XML (AVP 702) for a subscriber. Dynamically renders IMPU, IMPI, S-CSCF name, IMS user state, and IFC (IFC only returned for Data-Reference=13). Supports RepositoryData (AS-stored blob) and all standard Data-Reference values (0, 10-17). |
+| UDR / UDA | AS -> HSS | User-Data - returns Sh-Data XML (AVP 702) for a subscriber. Dynamically renders IMPU, IMPI, S-CSCF name, IMS user state, and IFC (IFC only returned for Data-Reference=13). Supports RepositoryData per Service-Indication (see below) and Data-Reference values 0 and 10-17. |
+| PUR / PUA | AS -> HSS | Profile-Update - stores, changes or removes repository data (Data-Reference 0) for an IMS Public User Identity and Service-Indication, with the Sequence-Number rules of TS 29.328 §6.1.2. Other Data-References return `DIAMETER_ERROR_USER_DATA_CANNOT_BE_MODIFIED` (5103). |
 | PNR / PNA | HSS -> AS | Push-Notification - pushes updated subscriber data to the Application Server. |
+
+**Repository data.** An Application Server can keep transparent data in the HSS, one document per IMS Public User Identity and Service-Indication, such as the MMTel supplementary services under `MMTEL-Services` (TS 29.364 §7.2.0). It is stored in the table `sh_repository_data`, and removed with the IMS subscriber.
+- **Who:** only the Origin-Hosts listed in `hss.ShRepositoryDataAS` may read or update it. Others get `DIAMETER_ERROR_USER_DATA_CANNOT_BE_READ` (5102) or `_CANNOT_BE_MODIFIED` (5103). The list is empty by default.
+- **Reading:** a UDR with Data-Reference 0 and one or more Service-Indication AVPs returns a `RepositoryData` element for each one. If nothing is stored for any of them, the UDA has no User-Data. A UDR with Data-Reference 0 and no Service-Indication returns the stored Sh profile or the IMS profile, as before.
+- **Writing:** new data takes Sequence-Number 0, each change or removal n+1, and 65535 is followed by 1. Anything else returns `DIAMETER_ERROR_TRANSPARENT_DATA_OUT_OF_SYNC` (5105). A RepositoryData without ServiceData removes the data. At most 64 KiB of ServiceData is accepted (`DIAMETER_ERROR_TOO_MUCH_DATA`, 5008).
+- **Not supported:** SNR/SNA and notifications for repository data, Update-Eff and Update-Eff-Enhance (several instances in one request), and data shared by alias identities.
 
 ### Gx - PCRF <-> PGW (3GPP TS 29.212)
 
@@ -398,7 +405,7 @@ MME / CSCF / PGW / AAA / AS / BSF / GMLC (Diameter peers)
         +-- internal/diameter/s6c/       SRI-SM, RSDS; HSS-originated ALSC (SMS routing + MWD)
         +-- internal/diameter/s13/       ECR (EIR check)
         +-- internal/diameter/cx/        UAR, SAR, LIR, MAR; HSS-originated RTR, PPR
-        +-- internal/diameter/sh/        UDR; HSS-originated PNR
+        +-- internal/diameter/sh/        UDR, PUR (repository data); HSS-originated PNR
         +-- internal/diameter/gx/        CCR; HSS-originated RAR
         +-- internal/diameter/rx/        AAR, STR; triggers Gx RAR to PGW for VoLTE bearers
         +-- internal/diameter/swx/       MAR, SAR; HSS-originated RTR, PPR

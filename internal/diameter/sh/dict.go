@@ -27,7 +27,10 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
         <rule avp="Origin-Host" required="true" max="1"/>
         <rule avp="Origin-Realm" required="true" max="1"/>
         <rule avp="Destination-Realm" required="true" max="1"/>
+        <rule avp="Vendor-Specific-Application-Id" required="false" max="1"/>
+        <rule avp="Destination-Host" required="false" max="1"/>
         <rule avp="User-Identity" required="true" max="1"/>
+        <rule avp="Service-Indication" required="false"/>
         <rule avp="Data-Reference" required="true"/>
       </request>
       <answer>
@@ -38,6 +41,36 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
         <rule avp="Origin-Host" required="true" max="1"/>
         <rule avp="Origin-Realm" required="true" max="1"/>
         <rule avp="User-Data" required="false" max="1"/>
+      </answer>
+    </command>
+    <!-- TS 29.329 6.1.3 and 6.1.4 -->
+    <command code="307" short="PU" name="Profile-Update">
+      <request>
+        <rule avp="Session-Id" required="true" max="1"/>
+        <rule avp="Vendor-Specific-Application-Id" required="false" max="1"/>
+        <rule avp="Auth-Session-State" required="true" max="1"/>
+        <rule avp="Origin-Host" required="true" max="1"/>
+        <rule avp="Origin-Realm" required="true" max="1"/>
+        <rule avp="Destination-Host" required="false" max="1"/>
+        <rule avp="Destination-Realm" required="true" max="1"/>
+        <rule avp="User-Identity" required="true" max="1"/>
+        <rule avp="User-Name" required="false" max="1"/>
+        <rule avp="Data-Reference" required="true"/>
+        <rule avp="User-Data" required="true" max="1"/>
+        <rule avp="Proxy-Info" required="false"/>
+        <rule avp="Route-Record" required="false"/>
+      </request>
+      <answer>
+        <rule avp="Session-Id" required="true" max="1"/>
+        <rule avp="Vendor-Specific-Application-Id" required="false" max="1"/>
+        <rule avp="Result-Code" required="false" max="1"/>
+        <rule avp="Experimental-Result" required="false" max="1"/>
+        <rule avp="Auth-Session-State" required="true" max="1"/>
+        <rule avp="Origin-Host" required="true" max="1"/>
+        <rule avp="Origin-Realm" required="true" max="1"/>
+        <rule avp="Repository-Data-ID" required="false" max="1"/>
+        <rule avp="Proxy-Info" required="false"/>
+        <rule avp="Route-Record" required="false"/>
       </answer>
     </command>
     <command code="309" short="PN" name="Push-Notification">
@@ -78,6 +111,18 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
         <rule avp="Public-Identity" required="false" max="1"/>
         <rule avp="MSISDN" required="false" max="1"/>
       </data>
+    </avp>
+    <avp name="Service-Indication" code="704" must="M,V" must-not="-" may-encrypt="N" vendor-id="10415">
+      <data type="OctetString"/>
+    </avp>
+    <avp name="Repository-Data-ID" code="715" must="V" must-not="-" may-encrypt="N" vendor-id="10415">
+      <data type="Grouped">
+        <rule avp="Service-Indication" required="true" max="1"/>
+        <rule avp="Sequence-Number" required="true" max="1"/>
+      </data>
+    </avp>
+    <avp name="Sequence-Number" code="716" must="V" must-not="-" may-encrypt="N" vendor-id="10415">
+      <data type="Unsigned32"/>
     </avp>
     <avp name="Data-Reference" code="703" must="M,V" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Enumerated">
