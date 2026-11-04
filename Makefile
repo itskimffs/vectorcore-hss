@@ -1,8 +1,8 @@
-.PHONY: build clean deps fuzz install uninstall ui dev-ui diamtest
+.PHONY: build clean deps fuzz install uninstall ui dev-ui diamtest n5sim
 
 BINARY=hss
-APP_VERSION=1.2.4
-API_VERSION=1.4.1
+APP_VERSION=1.3.0
+API_VERSION=1.4.2
 VERSION_PKG=github.com/svinson1121/vectorcore-hss/internal/version
 GO_LDFLAGS=-X $(VERSION_PKG).AppVersion=$(APP_VERSION) -X $(VERSION_PKG).APIVersion=$(API_VERSION)
 FUZZ_TIME?=30s
@@ -25,6 +25,10 @@ dev-ui: ## Start Vite dev server (proxies API to localhost:8080)
 diamtest: ## Build the Diameter test/load client (air/ulr/pur/suite/load/storm)
 	mkdir -p bin
 	go build -o bin/diamtest ./cmd/diamtest
+
+n5sim: ## Build the N5 (VoNR) P-CSCF/SMF test client (suite/smf/register/call)
+	mkdir -p bin
+	go build -o bin/n5sim ./cmd/n5sim
 
 deps:
 	go mod tidy

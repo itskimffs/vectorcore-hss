@@ -1,3 +1,4 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data in the web UI.
 const BASE = '/api/v1'
 
 async function request(method, path, body) {

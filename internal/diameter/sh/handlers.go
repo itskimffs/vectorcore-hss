@@ -1,3 +1,7 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package sh
 
 import (
@@ -22,6 +26,9 @@ type Handlers struct {
 	mcc         string
 	mnc         string
 	peers       PeerLookup
+	// legacyPrefixedMSISDN also accepts the length | NOA | TBCD User-Identity
+	// MSISDN form (sh.msisdn_encoding: legacy_prefixed).
+	legacyPrefixedMSISDN bool
 	// pendingPNR maps Diameter Session-ID to the original outbound request
 	// context so PNA answers can be correlated and logged accurately.
 	pendingPNR sync.Map
@@ -41,6 +48,8 @@ func NewHandlers(cfg *config.Config, store repository.Repository, log *zap.Logge
 		mnc:          cfg.HSS.MNC,
 		peers:        peers,
 		repositoryAS: map[string]bool{},
+
+		legacyPrefixedMSISDN: cfg.Sh.MSISDNEncoding == config.MSISDNEncodingLegacyPrefixed,
 	}
 	if rs, ok := store.(RepositoryDataStore); ok {
 		h.repository = rs

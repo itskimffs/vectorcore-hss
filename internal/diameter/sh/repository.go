@@ -1,3 +1,7 @@
+// Added by itskimffs (2026-11), see NOTICE: Sh repository data.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package sh
 
 // Repository data (transparent data) over Sh, 3GPP TS 29.328 §6.1.1 (Sh-Pull)
@@ -194,8 +198,8 @@ func (h *Handlers) PUR(_ diam.Conn, msg *diam.Message) (*diam.Message, error) {
 	defer cancel()
 
 	// 2. The user must exist. 3. Repository data is keyed by a public identity.
-	identity := extractIdentity(msg)
-	if identity == "" {
+	identity, err := h.extractIdentity(msg)
+	if err != nil || identity == "" {
 		return h.fail(msg, DiameterErrorUserUnknown), nil
 	}
 	sub, err := h.lookupIMSSubscriber(ctx, identity)

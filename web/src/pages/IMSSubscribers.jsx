@@ -1,3 +1,4 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data in the web UI.
 import React, { useState, useEffect, lazy, Suspense } from 'react'
 import { Plus, Pencil, Trash2, Search, RefreshCw, Phone, ChevronUp, ChevronDown, ChevronsUpDown, Database } from 'lucide-react'
 import { useSort } from '../hooks/useSort.js'

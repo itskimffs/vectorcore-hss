@@ -1,3 +1,7 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package models
 
 import "time"

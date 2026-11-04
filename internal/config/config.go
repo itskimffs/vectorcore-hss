@@ -1,3 +1,7 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package config
 
 import (
@@ -25,6 +29,39 @@ type Config struct {
 	PCF       PCFConfig       `yaml:"pcf"`
 	Admission AdmissionConfig `yaml:"admission"`
 	Timeouts  TimeoutConfig   `yaml:"timeouts"`
+	S6c       S6cConfig       `yaml:"s6c"`
+	Sh        ShConfig        `yaml:"sh"`
+}
+
+// Sh MSISDN encodings accepted in a UDR User-Identity (ShConfig.MSISDNEncoding).
+const (
+	// MSISDNEncodingTBCD is the TS 29.329 form: bare TBCD digits.
+	MSISDNEncodingTBCD = "tbcd"
+	// MSISDNEncodingLegacyPrefixed also accepts the non-standard
+	// length | NOA | TBCD form sent by older vectorcore-smsc releases,
+	// falling back to bare TBCD when a value is not in that form.
+	MSISDNEncodingLegacyPrefixed = "legacy_prefixed"
+)
+
+// ShConfig tunes Sh (TS 29.328/29.329) behaviour towards Application Servers.
+type ShConfig struct {
+	MSISDNEncoding string `yaml:"msisdn_encoding"`
+}
+
+// S6cConfig tunes S6c (TS 29.338) behaviour towards SMS-SCs.
+//
+// AlertRetryInterval enables a periodic sweep that re-sends Alert-Service-
+// Centre (ALR) for message-waiting data whose subscriber is SMS-registered on
+// an MME but whose alert was never delivered — e.g. the SMS-SC was
+// disconnected when the UE attached, or it never answered the ALR. Without the
+// sweep such an alert is only retried on the subscriber's next ULR/NOR, and an
+// SMS-SC holding the message in WAIT_EVENT never retries it on its own.
+// Per record, retries back off exponentially from AlertRetryInterval up to
+// AlertRetryMaxInterval. Both are in seconds; AlertRetryInterval 0 disables
+// the sweep.
+type S6cConfig struct {
+	AlertRetryInterval    int `yaml:"alert_retry_interval"`
+	AlertRetryMaxInterval int `yaml:"alert_retry_max_interval"`
 }
 
 // AdmissionConfig bounds how many Diameter handler executions may run
@@ -62,6 +99,9 @@ type FiveGCSBIConfig struct {
 	OAuth2Enabled bool            `yaml:"oauth2_enabled"`
 	OAuth2Bypass  bool            `yaml:"oauth2_bypass"`
 	Client        SBIClientConfig `yaml:"client"`
+	// AdvertiseAddress is the IPv4 address registered with the NRF. Leave
+	// empty to use bind_address when concrete, else the route toward the NRF.
+	AdvertiseAddress string `yaml:"advertise_address"`
 }
 
 type FiveGCNFConfig struct {
@@ -94,6 +134,8 @@ type UDMConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	BindAddress string `yaml:"bind_address"`
 	BindPort    int    `yaml:"bind_port"`
+	// AdvertiseAddress is the IPv4 address registered with the NRF.
+	AdvertiseAddress string `yaml:"advertise_address"`
 	// MCC and MNC identify the home PLMN for NRF registration.
 	// If left empty they are inherited from hss.MCC / hss.MNC at startup.
 	MCC string `yaml:"mcc"`
@@ -136,6 +178,8 @@ type PCFConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	BindAddress string `yaml:"bind_address"`
 	BindPort    int    `yaml:"bind_port"`
+	// AdvertiseAddress is the IPv4 address registered with the NRF.
+	AdvertiseAddress string `yaml:"advertise_address"`
 	// MCC and MNC identify the home PLMN for NRF registration.
 	// If left empty they are inherited from hss.MCC / hss.MNC at startup.
 	MCC           string          `yaml:"mcc"`
@@ -179,6 +223,13 @@ type HSSConfig struct {
 	DWRInterval                  int      `yaml:"DWRInterval"`
 	CancelLocationRequestEnabled bool     `yaml:"CancelLocationRequest_Enabled"`
 	AllowedPeers                 []string `yaml:"AllowedPeers"`
+	// RoutePeers lists Diameter relay peers (DRAs), by Origin-Host, used for
+	// HSS-initiated requests (ALR, CLR, IDR, Gx RAR, ...) whose destination
+	// has no tracked connection — e.g. an SMS-SC or PGW behind a DRA that has
+	// not sent a request since the HSS restarted. Tried in order. Peers that
+	// advertise the Relay Application-Id in CER are used after these without
+	// configuration; leave empty when no DRA is deployed.
+	RoutePeers []string `yaml:"RoutePeers"`
 	// SLhAuthorizedRealms permits additional GMLC Diameter Origin-Realms.
 	// OriginRealm is always permitted; an empty list permits no external realm.
 	SLhAuthorizedRealms []string `yaml:"SLhAuthorizedRealms"`
@@ -186,8 +237,8 @@ type HSSConfig struct {
 	// that may read and update Sh repository data (transparent data, Data-Reference
 	// 0 with a Service-Indication). An empty list permits none.
 	ShRepositoryDataAS []string `yaml:"ShRepositoryDataAS"`
-	MCC                 string   `yaml:"MCC"` // e.g. "311"
-	MNC                 string   `yaml:"MNC"` // e.g. "435"
+	MCC                string   `yaml:"MCC"` // e.g. "311"
+	MNC                string   `yaml:"MNC"` // e.g. "435"
 	// SCSCFPool is the list of S-CSCF URIs offered to the I-CSCF on first
 	// registration (when the subscriber has no S-CSCF assigned yet).
 	// Mirrors PyHSS scscf_pool. At least one entry is recommended.
@@ -323,6 +374,8 @@ func Load(path string) (*Config, error) {
 		PCF:       PCFConfig{Enabled: false, BindAddress: "::", BindPort: 7778, SBIClient: SBIClientConfig{Mode: "direct", ReconnectHoldoffTime: 2 * time.Second}},
 		Admission: AdmissionConfig{S6aMaxConcurrent: 15, GxMaxConcurrent: 8},
 		Timeouts:  TimeoutConfig{S6aSeconds: 5, GxSeconds: 5},
+		S6c:       S6cConfig{AlertRetryInterval: 300, AlertRetryMaxInterval: 3600},
+		Sh:        ShConfig{MSISDNEncoding: MSISDNEncodingTBCD},
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse: %w", err)
@@ -338,6 +391,19 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: hss.DiameterDSCP must be between 0 and 63")
 	}
 	normalizePCRFConfig(&cfg.PCRF)
+	if cfg.S6c.AlertRetryInterval < 0 || cfg.S6c.AlertRetryMaxInterval < 0 {
+		return nil, fmt.Errorf("config: s6c.alert_retry_interval and s6c.alert_retry_max_interval must not be negative")
+	}
+	if cfg.S6c.AlertRetryMaxInterval < cfg.S6c.AlertRetryInterval {
+		cfg.S6c.AlertRetryMaxInterval = cfg.S6c.AlertRetryInterval
+	}
+	switch cfg.Sh.MSISDNEncoding {
+	case MSISDNEncodingTBCD, MSISDNEncodingLegacyPrefixed:
+	case "":
+		cfg.Sh.MSISDNEncoding = MSISDNEncodingTBCD
+	default:
+		return nil, fmt.Errorf("config: sh.msisdn_encoding must be %q or %q, got %q", MSISDNEncodingTBCD, MSISDNEncodingLegacyPrefixed, cfg.Sh.MSISDNEncoding)
+	}
 	if cfg.Database.Type == "" {
 		return nil, fmt.Errorf("config: database.db_type is required")
 	}
@@ -402,6 +468,10 @@ func normalizeFiveGC(cfg *Config) {
 	if cfg.FiveGC.SBI.BindAddress != "" {
 		cfg.UDM.BindAddress = cfg.FiveGC.SBI.BindAddress
 		cfg.PCF.BindAddress = cfg.FiveGC.SBI.BindAddress
+	}
+	if cfg.FiveGC.SBI.AdvertiseAddress != "" {
+		cfg.UDM.AdvertiseAddress = cfg.FiveGC.SBI.AdvertiseAddress
+		cfg.PCF.AdvertiseAddress = cfg.FiveGC.SBI.AdvertiseAddress
 	}
 	if cfg.FiveGC.SBI.BindPort != 0 {
 		cfg.UDM.BindPort = cfg.FiveGC.SBI.BindPort

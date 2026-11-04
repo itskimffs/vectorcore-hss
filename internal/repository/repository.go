@@ -1,3 +1,7 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package repository
 
 import (
@@ -95,6 +99,10 @@ type Repository interface {
 	StoreMWD(ctx context.Context, rec *models.MessageWaitingData) error
 	GetMWDForIMSI(ctx context.Context, imsi string) ([]models.MessageWaitingData, error)
 	DeleteMWD(ctx context.Context, imsi, scAddr string) error
+	// ListMWDDueForAlertRetry returns up to limit MWD records whose subscriber
+	// is SMS-registered on an MME and whose last alert attempt is absent or
+	// older than attemptedBefore, never-attempted and oldest attempts first.
+	ListMWDDueForAlertRetry(ctx context.Context, attemptedBefore time.Time, limit int) ([]models.MessageWaitingData, error)
 
 	// Cache
 	InvalidateCache(imsi string)

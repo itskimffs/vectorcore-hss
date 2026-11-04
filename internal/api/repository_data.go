@@ -1,3 +1,7 @@
+// Added by itskimffs (2026-11), see NOTICE: Sh repository data in the API and web UI.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package api
 
 // Sh repository data from the API: an operator can change, add or remove the

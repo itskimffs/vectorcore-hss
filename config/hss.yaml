@@ -1,3 +1,4 @@
+# Modified by itskimffs (2026-11), see NOTICE: hss.ShRepositoryDataAS.
 hss:
   OriginHost: hss01.epc.mnc435.mcc311.3gppnetwork.org
   OriginRealm: epc.mnc435.mcc311.3gppnetwork.org
@@ -7,6 +8,14 @@ hss:
   DiameterDSCP: 46        # Diameter DSCP marking, 0-63; 0 leaves packets best-effort/default
   DWRInterval: 30
   CancelLocationRequest_Enabled: true
+  # Relay peers (DRAs), by Origin-Host, used for HSS-initiated requests (ALR,
+  # CLR, IDR, Gx RAR, ...) whose destination has no tracked connection, e.g. an
+  # SMS-SC or PGW behind a DRA that has not sent a request since the HSS
+  # restarted. Tried in order. Peers advertising the Relay Application-Id in
+  # CER (such as vectorcore-dra) are used after these automatically, so this
+  # is only needed for a DRA that does not. Leave empty without a DRA.
+  # RoutePeers:
+  #   - dra01.epc.mnc435.mcc311.3gppnetwork.org
   # SLh authorizes the local realm automatically. Add external GMLC Diameter
   # Origin-Realms here; an empty list does not authorize arbitrary peers.
   SLhAuthorizedRealms:
@@ -49,6 +58,23 @@ admission:
 timeouts:
   s6a_timeout: 5
   gx_timeout: 5
+
+# S6c (SMS-SC) alert retry. Periodically re-sends Alert-Service-Centre (ALR)
+# for message-waiting data whose subscriber is SMS-registered but whose alert
+# was never acknowledged - e.g. the SMS-SC was disconnected when the UE
+# attached. Without it the alert waits for the subscriber's next ULR/NOR.
+# Per-record retries back off from alert_retry_interval up to
+# alert_retry_max_interval (seconds). alert_retry_interval: 0 disables it.
+s6c:
+  alert_retry_interval: 300
+  alert_retry_max_interval: 3600
+
+# Sh UDR User-Identity MSISDN encoding.
+#   tbcd            - TS 29.329 bare TBCD digits (default)
+#   legacy_prefixed - also accept length | NOA | TBCD, as sent by
+#                     vectorcore-smsc releases before its Sh MSISDN fix
+sh:
+  msisdn_encoding: tbcd
 
 logging:
   # Supported levels: debug, info, warn, error
@@ -107,6 +133,7 @@ pcrf:
   sbi:
     bind_address: "::"
     bind_port: 7777
+    # advertise_address: 10.0.2.117   # IPv4 registered with the NRF; default: bind_address if concrete, else the source IP routing to the NRF
 
     # TLS leave blank for cleartext HTTP/2 (h2c).
     # tls_cert_file: /etc/hss/tls/cert.pem

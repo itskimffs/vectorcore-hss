@@ -70,8 +70,8 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
         <rule avp="LMSI"                             required="false" max="1"/>
         <rule avp="MWD-Status"                       required="false" max="1"/>
         <rule avp="MME-Absent-User-Diagnostic-SM"    required="false" max="1"/>
-        <rule avp="SGSN-Absent-User-Diagnostic-SM"   required="false" max="1"/>
         <rule avp="MSC-Absent-User-Diagnostic-SM"    required="false" max="1"/>
+        <rule avp="SGSN-Absent-User-Diagnostic-SM"   required="false" max="1"/>
       </answer>
     </command>
 
@@ -129,7 +129,7 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
       </answer>
     </command>
 
-    <!-- S6c-specific AVPs (TS 29.338 §7.3) -->
+    <!-- S6c-specific AVPs (TS 29.338 §5.3.3) -->
     <avp name="SC-Address" code="3300" must="M,V" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="OctetString"/>
     </avp>
@@ -148,39 +148,39 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
     <avp name="MME-Absent-User-Diagnostic-SM" code="3313" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Unsigned32"/>
     </avp>
-    <avp name="SGSN-Absent-User-Diagnostic-SM" code="3314" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
+    <avp name="MSC-Absent-User-Diagnostic-SM" code="3314" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Unsigned32"/>
     </avp>
-    <avp name="MSC-Absent-User-Diagnostic-SM" code="3315" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
+    <avp name="SGSN-Absent-User-Diagnostic-SM" code="3315" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Unsigned32"/>
     </avp>
     <avp name="SM-Delivery-Outcome" code="3316" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Grouped">
-        <rule avp="MME-Delivery-Outcome"      required="false" max="1"/>
-        <rule avp="SGSN-Delivery-Outcome"     required="false" max="1"/>
-        <rule avp="MSC-Delivery-Outcome"      required="false" max="1"/>
-        <rule avp="IP-SM-GW-Delivery-Outcome" required="false" max="1"/>
+        <rule avp="MME-SM-Delivery-Outcome"      required="false" max="1"/>
+        <rule avp="MSC-SM-Delivery-Outcome"      required="false" max="1"/>
+        <rule avp="SGSN-SM-Delivery-Outcome"     required="false" max="1"/>
+        <rule avp="IP-SM-GW-SM-Delivery-Outcome" required="false" max="1"/>
       </data>
     </avp>
-    <avp name="MME-Delivery-Outcome" code="3317" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
+    <avp name="MME-SM-Delivery-Outcome" code="3317" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Grouped">
         <rule avp="SM-Delivery-Cause" required="false" max="1"/>
         <rule avp="Absent-User-Diagnostic-SM" required="false" max="1"/>
       </data>
     </avp>
-    <avp name="SGSN-Delivery-Outcome" code="3318" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
+    <avp name="MSC-SM-Delivery-Outcome" code="3318" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Grouped">
         <rule avp="SM-Delivery-Cause" required="false" max="1"/>
         <rule avp="Absent-User-Diagnostic-SM" required="false" max="1"/>
       </data>
     </avp>
-    <avp name="MSC-Delivery-Outcome" code="3319" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
+    <avp name="SGSN-SM-Delivery-Outcome" code="3319" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Grouped">
         <rule avp="SM-Delivery-Cause" required="false" max="1"/>
         <rule avp="Absent-User-Diagnostic-SM" required="false" max="1"/>
       </data>
     </avp>
-    <avp name="IP-SM-GW-Delivery-Outcome" code="3320" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
+    <avp name="IP-SM-GW-SM-Delivery-Outcome" code="3320" must="V" may="M" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Grouped">
         <rule avp="SM-Delivery-Cause" required="false" max="1"/>
         <rule avp="Absent-User-Diagnostic-SM" required="false" max="1"/>
