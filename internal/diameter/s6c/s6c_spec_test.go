@@ -36,7 +36,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/fiorix/go-diameter/v4/diam"
 	"github.com/fiorix/go-diameter/v4/diam/avp"
@@ -100,7 +102,8 @@ type s6cStore struct {
 	byMSISDN map[string]*models.Subscriber
 
 	// MWD state
-	mwds map[string][]models.MessageWaitingData // keyed by IMSI
+	mwds      map[string][]models.MessageWaitingData // keyed by IMSI
+	getMWDErr error                                  // returned by GetMWDForIMSI when set
 
 	// Call recording
 	storedMWD  []storedMWDArgs
@@ -179,7 +182,46 @@ func (s *s6cStore) StoreMWD(_ context.Context, rec *models.MessageWaitingData) e
 }
 
 func (s *s6cStore) GetMWDForIMSI(_ context.Context, imsi string) ([]models.MessageWaitingData, error) {
+	if s.getMWDErr != nil {
+		return nil, s.getMWDErr
+	}
 	return s.mwds[imsi], nil
+}
+
+// ListMWDDueForAlertRetry mirrors the SQL implementation: SMS-registered
+// subscriber with a serving MME, attempt absent or before the cutoff,
+// never-attempted first then oldest attempt.
+func (s *s6cStore) ListMWDDueForAlertRetry(_ context.Context, attemptedBefore time.Time, limit int) ([]models.MessageWaitingData, error) {
+	var out []models.MessageWaitingData
+	for imsi, recs := range s.mwds {
+		sub, ok := s.byIMSI[imsi]
+		if !ok || sub.MMERegisteredForSMS == nil || !*sub.MMERegisteredForSMS ||
+			sub.ServingMME == nil || *sub.ServingMME == "" {
+			continue
+		}
+		for _, r := range recs {
+			if r.LastAlertAttemptAt == nil || r.LastAlertAttemptAt.Before(attemptedBefore) {
+				out = append(out, r)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i].LastAlertAttemptAt, out[j].LastAlertAttemptAt
+		if (a == nil) != (b == nil) {
+			return a == nil
+		}
+		if a != nil && !a.Equal(*b) {
+			return a.Before(*b)
+		}
+		if out[i].IMSI != out[j].IMSI {
+			return out[i].IMSI < out[j].IMSI
+		}
+		return out[i].SCAddress < out[j].SCAddress
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (s *s6cStore) DeleteMWD(_ context.Context, imsi, scAddr string) error {
@@ -418,7 +460,7 @@ func buildUserIdentifierAVPForTest(imsi string, msisdn *string) *diam.AVP {
 	return diam.NewAVP(avpUserIdentifier, avp.Mbit|avp.Vbit, Vendor3GPP, &diam.GroupedAVP{AVP: children})
 }
 
-// mmeOutcomeAVP builds an SM-Delivery-Outcome containing an MME-Delivery-Outcome.
+// mmeOutcomeAVP builds an SM-Delivery-Outcome containing an MME-SM-Delivery-Outcome.
 func mmeOutcomeAVP(cause int32) *diam.AVP {
 	return mmeOutcomeWithDiagnosticAVP(cause, nil)
 }
@@ -448,7 +490,7 @@ func smsmiCorrelationIDAVP() *diam.AVP {
 	}))
 }
 
-// sgsnOutcomeAVP builds an SM-Delivery-Outcome containing an SGSN-Delivery-Outcome.
+// sgsnOutcomeAVP builds an SM-Delivery-Outcome containing an SGSN-SM-Delivery-Outcome (3319).
 func sgsnOutcomeAVP(cause int32) *diam.AVP {
 	return diam.NewAVP(avpSMDeliveryOutcome, avp.Mbit|avp.Vbit, Vendor3GPP,
 		&diam.GroupedAVP{AVP: []*diam.AVP{
@@ -695,8 +737,8 @@ func TestTBCDRoundTripE164(t *testing.T) {
 
 // ── parseDeliveryOutcome tests ────────────────────────────────────────────────
 
-// TestParseDeliveryOutcomeMME verifies extraction from MME-Delivery-Outcome sub-AVP.
-// TS 29.338 §7.3.16 — SM-Delivery-Outcome contains node-specific sub-grouped AVPs.
+// TestParseDeliveryOutcomeMME verifies extraction from MME-SM-Delivery-Outcome sub-AVP.
+// TS 29.338 §5.3.3.14 — SM-Delivery-Outcome contains node-specific sub-grouped AVPs.
 func TestParseDeliveryOutcomeMME(t *testing.T) {
 	msg := diam.NewRequest(cmdRDSM, AppIDS6c, dict.Default)
 	msg.InsertAVP(mmeOutcomeAVP(SMDeliveryCauseAbsentUser))
@@ -707,7 +749,8 @@ func TestParseDeliveryOutcomeMME(t *testing.T) {
 	}
 }
 
-// TestParseDeliveryOutcomeSGSN verifies extraction from SGSN-Delivery-Outcome sub-AVP.
+// TestParseDeliveryOutcomeSGSN verifies extraction from SGSN-SM-Delivery-Outcome (3319).
+// TS 29.338 §5.3.3.17.
 func TestParseDeliveryOutcomeSGSN(t *testing.T) {
 	msg := diam.NewRequest(cmdRDSM, AppIDS6c, dict.Default)
 	msg.InsertAVP(sgsnOutcomeAVP(SMDeliveryCauseMemoryCapacityExceeded))
@@ -718,10 +761,9 @@ func TestParseDeliveryOutcomeSGSN(t *testing.T) {
 	}
 }
 
-// TestParseDeliveryOutcomeMSC verifies MSC-Delivery-Outcome (code 3319).
-// TS 29.338 §7.3.18 — MSC-Delivery-Outcome for GERAN/UTRAN access.
+// TestParseDeliveryOutcomeMSC verifies MSC-SM-Delivery-Outcome (code 3318).
+// TS 29.338 §5.3.3.16 — MSC-SM-Delivery-Outcome for GERAN/UTRAN access.
 func TestParseDeliveryOutcomeMSC(t *testing.T) {
-	const avpMSCDeliveryOutcome = uint32(3319)
 	outcome := diam.NewAVP(avpSMDeliveryOutcome, avp.Mbit|avp.Vbit, Vendor3GPP,
 		&diam.GroupedAVP{AVP: []*diam.AVP{
 			diam.NewAVP(avpMSCDeliveryOutcome, avp.Mbit|avp.Vbit, Vendor3GPP,
@@ -739,10 +781,9 @@ func TestParseDeliveryOutcomeMSC(t *testing.T) {
 	}
 }
 
-// TestParseDeliveryOutcomeIPSMGW verifies IP-SM-GW-Delivery-Outcome (code 3320).
-// TS 29.338 §7.3.19 — used by IP-SM-GW nodes.
+// TestParseDeliveryOutcomeIPSMGW verifies IP-SM-GW-SM-Delivery-Outcome (code 3320).
+// TS 29.338 §5.3.3.18 — used by IP-SM-GW nodes.
 func TestParseDeliveryOutcomeIPSMGW(t *testing.T) {
-	const avpIPSMGWDeliveryOutcome = uint32(3320)
 	outcome := diam.NewAVP(avpSMDeliveryOutcome, avp.Mbit|avp.Vbit, Vendor3GPP,
 		&diam.GroupedAVP{AVP: []*diam.AVP{
 			diam.NewAVP(avpIPSMGWDeliveryOutcome, avp.Mbit|avp.Vbit, Vendor3GPP,
@@ -773,7 +814,7 @@ func TestParseDeliveryOutcomeAbsent(t *testing.T) {
 
 // TestParseDeliveryOutcomeAbsentUserDiagnostic verifies that the
 // Absent-User-Diagnostic-SM code is extracted when present.
-// TS 29.338 §7.3.22 — diagnostic code is optional within the node sub-AVP.
+// TS 29.338 §5.3.3.20 — diagnostic code is optional within the node sub-AVP.
 func TestParseDeliveryOutcomeAbsentUserDiagnostic(t *testing.T) {
 	const diagCode = uint32(42)
 	outcome := diam.NewAVP(avpSMDeliveryOutcome, avp.Mbit|avp.Vbit, Vendor3GPP,
@@ -834,7 +875,7 @@ func TestSRISM_AttachedSubscriber(t *testing.T) {
 	// TS 29.338 §5.3.2.1: Serving-Node with MME-Name must be present
 	requireServingNodeMMEName(t, ans, mmeName)
 
-	// TS 29.338 §5.3.2.1: MWD-Status must NOT be present when subscriber is attached
+	// Attached and SMS-registered with no MWD held: nothing to report.
 	requireNoAVP(t, ans, avpMWDStatus, Vendor3GPP)
 }
 
@@ -1067,7 +1108,7 @@ func TestRSDS_AbsentUser(t *testing.T) {
 	requireResultCode(t, ans, 2001)
 	requireUserIdentifier(t, ans, imsi, ptr(msisdn))
 
-	// TS 29.338 §5.3.2.4 / §7.3.12: MNRF bit (0x02) must be set in MWD-Status
+	// TS 29.338 §5.3.2.4 / §5.3.3.8: MNRF bit (0x02) must be set in MWD-Status
 	requireMWDStatus(t, ans, MWDStatusMNRF)
 
 	// Verify StoreMWD was called with MNRF status flag
@@ -1107,7 +1148,7 @@ func TestRSDS_MemoryCapacityExceeded(t *testing.T) {
 	requireResultCode(t, ans, 2001)
 	requireUserIdentifier(t, ans, imsi, ptr(msisdn))
 
-	// TS 29.338 §7.3.12: MCEF bit (0x04) must be set
+	// TS 29.338 §5.3.3.8: MCEF bit (0x04) must be set
 	requireMWDStatus(t, ans, MWDStatusMCEF)
 
 	if len(store.storedMWD) != 1 {
@@ -1291,21 +1332,48 @@ func TestRSDS_LookupByUserIdentifierMSISDN(t *testing.T) {
 }
 
 // TestRSDS_UnknownSubscriber verifies Experimental-Result-Code 5001 for an
-// unknown subscriber in an RSDS request.
+// unknown subscriber in an RSDS request, for every identity form. An unknown
+// subscriber is a normal answer, not a handler failure, so like SRI-SM the
+// handler returns a nil error (no ERROR log, no result="error" metric).
 func TestRSDS_UnknownSubscriber(t *testing.T) {
-	store := newS6cStore()
+	unknownMSISDN := "33699999998"
+	for _, tc := range []struct {
+		name string
+		req  func(t *testing.T) *diam.Message
+	}{
+		{"User-Identifier IMSI", func(t *testing.T) *diam.Message {
+			req := buildRDSMByMSISDN(t, "33699999999", "33600000005", nil)
+			req.InsertAVP(buildUserIdentifierAVPForTest("001010009999998", nil))
+			return req
+		}},
+		{"User-Identifier MSISDN", func(t *testing.T) *diam.Message {
+			req := buildRDSMByIMSI(t, "001010009999999", "33600000005", nil)
+			req.InsertAVP(buildUserIdentifierAVPForTest("", &unknownMSISDN))
+			return req
+		}},
+		{"User-Name", func(t *testing.T) *diam.Message {
+			return buildRDSMByIMSI(t, "001010009999999", "33600000005", nil)
+		}},
+		{"legacy MSISDN", func(t *testing.T) *diam.Message {
+			return buildRDSMByMSISDN(t, "33699999999", "33600000005", nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newS6cStore()
+			h := newTestHandlers(store)
 
-	h := newTestHandlers(store)
-	ans, err := h.RDSMR(nil, buildRDSMByMSISDN(t, "33699999999", "33600000005", nil))
-	if err == nil {
-		t.Fatal("expected error for unknown subscriber, got nil")
-	}
+			ans, err := h.RDSMR(nil, tc.req(t))
+			if err != nil {
+				t.Fatalf("RDSMR returned error for unknown subscriber: %v", err)
+			}
 
-	requireExperimentalResultCode(t, ans, 5001)
+			requireExperimentalResultCode(t, ans, 5001)
 
-	// No MWD should be stored for an unknown subscriber
-	if len(store.storedMWD) != 0 {
-		t.Errorf("StoreMWD called for unknown subscriber")
+			// No MWD should be stored for an unknown subscriber
+			if len(store.storedMWD) != 0 {
+				t.Errorf("StoreMWD called for unknown subscriber")
+			}
+		})
 	}
 }
 
@@ -1337,7 +1405,7 @@ func TestRSDS_LookupByIMSI(t *testing.T) {
 
 // TestRSDS_SGSNDeliveryOutcome verifies that an SGSN delivery outcome (used for
 // GPRS/UTRAN access) is handled identically to MME delivery outcome.
-// TS 29.338 §7.3.17 — SGSN-Delivery-Outcome mirrors MME-Delivery-Outcome structure.
+// TS 29.338 §5.3.3.17 — SGSN-SM-Delivery-Outcome mirrors MME-SM-Delivery-Outcome structure.
 func TestRSDS_SGSNDeliveryOutcome(t *testing.T) {
 	store := newS6cStore()
 	msisdn := "33612000006"

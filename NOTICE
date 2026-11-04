@@ -1,8 +1,19 @@
 vectorcore-hss
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-This is a fork of github.com/vectorcore-mobile/vectorcore-hss (upstream commit 163029b),
-maintained by itskimffs.
+This is a fork of github.com/vectorcore-mobile/vectorcore-hss, maintained by
+itskimffs. It last merged upstream at commit 20698b6.
 
-Modifications in this fork (itskimffs, 2026-10); each modified file carries a notice:
-- Rx: Media-Type CONTROL (registration AAR from the P-CSCF) installs no PCC rule, since the Open5GS SMF creates a dedicated bearer per rule (internal/diameter/rx/aar.go)
+Modifications in this fork (itskimffs, 2026-11); each modified file carries a notice:
+- Zh: the dictionary declares the Multimedia-Auth request and answer rules and
+  the SIP AVPs, so the HSS can read a BSF's MAR (internal/diameter/zh)
+- Sh: repository data (transparent data) per IMS Public User Identity and
+  Service-Indication, with PUR and UDR (TS 29.328, TS 29.329), the AS
+  permission list hss.ShRepositoryDataAS and the table sh_repository_data
+  (internal/diameter/sh, internal/repository, internal/models, internal/config,
+  internal/diameter/server.go, config/hss.yaml)
+- API and web UI: view, change, add and delete Sh repository data, kept with
+  the IMS subscriber on delete, backup and restore (internal/api, web/src)
+
+The fork's earlier Rx change (no PCC rule for AF signalling) is now in
+upstream itself, as commit c13d1ae.

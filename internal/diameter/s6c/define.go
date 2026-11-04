@@ -8,6 +8,9 @@ const (
 	AlertTriggerAttach          AlertTrigger = "attach"
 	AlertTriggerUserAvailable   AlertTrigger = "user_available"
 	AlertTriggerMemoryAvailable AlertTrigger = "memory_available"
+	// AlertTriggerRetry is the periodic re-alert of MWD whose subscriber is
+	// already SMS-registered (see RunAlertRetry).
+	AlertTriggerRetry AlertTrigger = "retry"
 )
 
 const (
@@ -31,14 +34,16 @@ const (
 	avpMMENumberForMTSMS = uint32(1645)
 	avpUserIdentifier    = uint32(3102)
 
-	// S6c-specific AVP codes (TS 29.338 §7.3)
+	// S6c-specific AVP codes (TS 29.338 §5.3.3; code table 5.3.3.1/1)
 	avpSCAddress                 = uint32(3300)
 	avpSMRPMTI                   = uint32(3308)
 	avpMWDStatus                 = uint32(3312)
 	avpMMEAbsentUserDiagnosticSM = uint32(3313)
 	avpSMDeliveryOutcome         = uint32(3316)
-	avpMMEDeliveryOutcome        = uint32(3317)
-	avpSGSNDeliveryOutcome       = uint32(3318)
+	avpMMEDeliveryOutcome        = uint32(3317) // MME-SM-Delivery-Outcome
+	avpMSCDeliveryOutcome        = uint32(3318) // MSC-SM-Delivery-Outcome
+	avpSGSNDeliveryOutcome       = uint32(3319) // SGSN-SM-Delivery-Outcome
+	avpIPSMGWDeliveryOutcome     = uint32(3320) // IP-SM-GW-SM-Delivery-Outcome
 	avpSMDeliveryCause           = uint32(3321)
 	avpAbsentUserDiagnosticSM    = uint32(3322)
 	avpRDRFlags                  = uint32(3323)
@@ -46,7 +51,7 @@ const (
 	avpMaximumUEAvailabilityTime = uint32(3329)
 	avpSMSGMSCAlertEvent         = uint32(3333)
 
-	// MWD-Status bitmask values (TS 29.338 §7.3.12)
+	// MWD-Status bitmask values (TS 29.338 §5.3.3.8)
 	MWDStatusMNRF = uint32(0x02) // Mobile Not Reachable Flag
 	MWDStatusMCEF = uint32(0x04) // Memory Capacity Exceeded Flag
 	MWDStatusMNRG = uint32(0x08) // Mobile Not Reachable for GPRS
@@ -57,7 +62,7 @@ const (
 	// SMS-GMSC-Alert-Event bitmask values (TS 29.338 §5.3.3.23)
 	SMSGMSCAlertEventUEAvailableForMTSMS = uint32(0x01)
 
-	// SM-Delivery-Cause values (TS 29.338 §7.3.21)
+	// SM-Delivery-Cause values (TS 29.338 §5.3.3.19)
 	SMDeliveryCauseMemoryCapacityExceeded = int32(0)
 	SMDeliveryCauseAbsentUser             = int32(1)
 	SMDeliveryCauseSuccessfulTransfer     = int32(2)
@@ -94,10 +99,15 @@ type RDR struct {
 // SMDeliveryOutcomeResult is the parsed result of an SM-Delivery-Outcome grouped AVP.
 type SMDeliveryOutcomeResult struct {
 	// Cause is the SM-Delivery-Cause value from whichever node sub-AVP was present.
-	// -1 means the AVP was absent from the request (treat as AbsentUser).
+	// -1 means no cause could be read (Status absent or malformed); the caller
+	// treats that as AbsentUser.
 	Cause int32
 	// AbsentUserDiagnostic is the optional diagnostic code from the sub-AVP.
 	AbsentUserDiagnostic uint32
+	// Status says how the outcome was read; see parseDeliveryOutcome.
+	Status deliveryOutcomeStatus
+	// Problem describes why Status is malformed or unknown_cause, for logging.
+	Problem string
 }
 
 // ALA holds fields from an Alert-Service-Centre-Answer (reply to our ALR request).

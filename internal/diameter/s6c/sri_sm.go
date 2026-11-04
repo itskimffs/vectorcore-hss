@@ -59,7 +59,17 @@ func (h *Handlers) SRISR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 			datatype.OctetString(encodeMSISDNBytes(*sub.MSISDN)))
 	}
 
+	// Stored MWD flags (e.g. MCEF) are reported even for an attached UE. A
+	// lookup failure only loses the flags, not the routing information.
+	records, err := h.store.GetMWDForIMSI(ctx, sub.IMSI)
+	if err != nil {
+		h.log.Warn("s6c: SRI-SM MWD lookup failed — MWD-Status from registration only",
+			zap.String("imsi", sub.IMSI), zap.Error(err))
+		records = nil
+	}
+
 	smsRegistered := sub.MMERegisteredForSMS != nil && *sub.MMERegisteredForSMS
+	mwdStatus := sriMWDStatus(records, sub.ServingMME != nil && smsRegistered)
 	if sub.ServingMME != nil && smsRegistered {
 		// Subscriber is registered — return Serving-Node.
 		var nodeAVPs []*diam.AVP
@@ -78,15 +88,17 @@ func (h *Handlers) SRISR(conn diam.Conn, msg *diam.Message) (*diam.Message, erro
 		}
 		ans.NewAVP(avpServingNode, avp.Mbit|avp.Vbit, Vendor3GPP,
 			&diam.GroupedAVP{AVP: nodeAVPs})
-	} else {
-		// Subscriber not attached — set MNRF (Mobile Not Reachable Flag).
-		ans.NewAVP(avpMWDStatus, avp.Vbit, Vendor3GPP,
-			datatype.Unsigned32(MWDStatusMNRF))
+	}
+	// Not SMS-reachable always carries MNRF; reachable carries only stored
+	// flags such as MCEF, and none at all when no MWD is held.
+	if mwdStatus != 0 {
+		ans.NewAVP(avpMWDStatus, avp.Vbit, Vendor3GPP, datatype.Unsigned32(mwdStatus))
 	}
 
 	h.log.Info("s6c: SRI-SM success", zap.String("imsi", sub.IMSI),
 		zap.Bool("attached", sub.ServingMME != nil),
-		zap.Bool("sms_registered", smsRegistered))
+		zap.Bool("sms_registered", smsRegistered),
+		zap.Uint32("mwd_status", mwdStatus))
 	return ans, nil
 }
 

@@ -1,3 +1,7 @@
+// Added by itskimffs (2026-11), see NOTICE: Sh repository data in the API and web UI.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package api
 
 import (
@@ -110,7 +114,10 @@ func TestPutIMSSubscriberRepositoryData(t *testing.T) {
 		t.Fatalf("put: %+v %v", out, err)
 	}
 	// The number read is now stale.
-	if st := statusOf(t, func() error { _, err := putRepo(s, ims.IMSSubscriberID, "MMTEL-Services", "<x/>", 5, intp(3)); return err }()); st != 409 {
+	if st := statusOf(t, func() error {
+		_, err := putRepo(s, ims.IMSSubscriberID, "MMTEL-Services", "<x/>", 5, intp(3))
+		return err
+	}()); st != 409 {
 		t.Fatalf("stale put: %d", st)
 	}
 	// Any number may be set, also lower, without a check.

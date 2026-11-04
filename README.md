@@ -1,3 +1,4 @@
+<!-- Modified by itskimffs (2026-11), see NOTICE: Sh repository data. -->
 # VectorCore HSS
 
 A high-performance Home Subscriber Server (HSS), PCRF, HLR, UDM, UDR, and PCF for 3GPP 2G/3G, LTE/4G, 5GC, and IMS
@@ -10,7 +11,8 @@ networks, written in Go.
 - **Multi-interface Diameter server** - S6a, S6c, S13, Cx, Sh, Gx, Rx, SWx, SLh, Zh on a single TCP/SCTP listener
 - **GSUP/HLR** - Osmocom IPA+GSUP server (port 4222) for OsmoMSC/OsmoSGSN; handles SendAuthInfo, UpdateLocation, PurgeMS; generates 2G triplets and 3G quintuplets for CSFB voice and SGs SMS
 - **SMS routing (S6c)** - Send-Routing-Info-for-SM (SRI-SM) resolves MSISDN to serving MME for MT SMS delivery via SGd/T4; Report-SM-Delivery-Status (RSDS) stores Message Waiting Data on delivery failure; Alert-Service-Centre (ALSC) is HSS-initiated and fires automatically when the subscriber re-attaches; SMS-in-MME registration state (MME-Number-for-MT-SMS, MME-Registered-for-SMS) tracked per subscriber via ULR
-- **5GC UDM, UDR, and PCF** - N13, N10, N8, N15, and N7 support over a shared SBI listener; UDM, UDR, and PCF are co-located in one process with in-process data sharing; `nudr-dr` / N36 endpoints are exposed for internal service-to-service use
+- **5GC UDM, UDR, and PCF** - N13, N10, N8, N15, N7, and N5 support over a shared SBI listener; UDM, UDR, and PCF are co-located in one process with in-process data sharing; `nudr-dr` / N36 endpoints are exposed for internal service-to-service use
+- **VoNR policy (N5)** - Npcf_PolicyAuthorization for the P-CSCF (built to the requests the docker_open5gs Kamailio `WITH_N5` script sends); IMS calls get the same QoS as VoLTE (audio 5QI 1, video 5QI 2, GBR), pushed to the SMF as QoS flows and removed on BYE or PDU session release
 - **Milenage authentication** - EUTRAN vector generation (AIR), EAP-AKA vector generation (SWx MAR), GBA vector generation (Zh MAR); custom c/r constant profiles per-AUC
 - **Atomic SQN management** - SELECT FOR UPDATE prevents SQN races during concurrent AIR from multiple MMEs
 - **In-memory read cache** - 60-second TTL cache on AUC and Subscriber hot paths
@@ -53,7 +55,7 @@ networks, written in Go.
 |---------|-----------|-------------|
 | SRI-SM / SRI-SMA | SMS-SC -> HSS | Send-Routing-Info-for-SM - looks up subscriber by MSISDN (or IMSI, BCD-encoded on the wire); returns IMSI, serving MME address and realm, and MME-Number-for-MT-SMS so the SMS-SC can route the MT SMS via SGd/T4. Returns MWD-Status flags if message waiting data is pending. |
 | RSDS / RSDSA | SMS-SC -> HSS | Report-SM-Delivery-Status - on delivery failure (absent subscriber or memory-capacity exceeded) stores a Message Waiting Data record keyed to the SMS-SC; on successful delivery clears the MWD record. Supports MNRF and MCEF status flags per TS 29.338 §5.3.2.4. |
-| ALSC / ALSCA | HSS -> SMS-SC | Alert-Service-Centre - HSS-initiated; sent to each SMS-SC with a pending MWD record when the subscriber re-attaches (triggered by ULR success). MWD is deleted only after the SMS-SC returns Result-Code 2001; if the peer is unreachable the MWD is left in place and retried on the next ULR. |
+| ALSC / ALSCA | HSS -> SMS-SC | Alert-Service-Centre - HSS-initiated; sent to each SMS-SC with a pending MWD record when the subscriber re-attaches (triggered by ULR success). MWD is deleted only after the SMS-SC returns Result-Code 2001; if the peer is unreachable the MWD is left in place and retried on the next ULR/NOR and by a periodic retry sweep (`s6c.alert_retry_interval`, default 300 s with backoff to 1 h). |
 
 The ULR handler on S6a detects SMS-in-MME capability from ULR-Flags and the MME-Number-for-MT-SMS AVP, stores the registration state on the subscriber record, and sets the MME-Registered-for-SMS bit in ULA-Flags. SRI-SM returns this MME number in the Serving-Node grouped AVP so the SMS-SC can route directly to the MME.
 
@@ -72,7 +74,7 @@ The ULR handler on S6a detects SMS-in-MME capability from ULR-Flags and the MME-
 
 | Command | Direction | Description |
 |---------|-----------|-------------|
-| UDR / UDA | AS -> HSS | User-Data - returns Sh-Data XML (AVP 702) for a subscriber. Dynamically renders IMPU, IMPI, S-CSCF name, IMS user state, and IFC (IFC only returned for Data-Reference=13). Supports RepositoryData per Service-Indication (see below) and Data-Reference values 0 and 10-17. |
+| UDR / UDA | AS -> HSS | User-Data - returns Sh-Data XML (AVP 702) for a subscriber. Dynamically renders IMPU, IMPI, S-CSCF name, IMS user state, and IFC (IFC only returned for Data-Reference=13). Supports RepositoryData per Service-Indication (see below) and Data-Reference values 0 and 10-17. A User-Identity MSISDN must be bare TBCD (TS 29.329); set `sh.msisdn_encoding: legacy_prefixed` to also accept the `len \| NOA \| TBCD` form of older vectorcore-smsc releases. |
 | PUR / PUA | AS -> HSS | Profile-Update - stores, changes or removes repository data (Data-Reference 0) for an IMS Public User Identity and Service-Indication, with the Sequence-Number rules of TS 29.328 §6.1.2. Other Data-References return `DIAMETER_ERROR_USER_DATA_CANNOT_BE_MODIFIED` (5103). |
 | PNR / PNA | HSS -> AS | Push-Notification - pushes updated subscriber data to the Application Server. |
 
@@ -228,6 +230,12 @@ make build
 ```
 
 Output: `bin/hss`
+
+Optional test tools:
+
+```bash
+make n5sim      # bin/n5sim - N5 / PCF test tool (plays the Kamailio P-CSCF and the SMF; see docs/api.md)
+```
 
 ### Configure
 

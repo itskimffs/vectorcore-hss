@@ -1,3 +1,7 @@
+// Added by itskimffs (2026-11), see NOTICE: Zh dictionary.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package zh
 
 import (

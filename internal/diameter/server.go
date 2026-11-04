@@ -1,8 +1,13 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package diameter
 
 import (
 	"context"
 	"net"
+	"slices"
 	"strconv"
 	"time"
 
@@ -55,6 +60,7 @@ type Server struct {
 	s13   *s13.Handlers
 	cxH   *cx.Handlers
 	gxH   *gx.Handlers
+	s6cH  *s6c.Handlers
 	ct    *ConnTracker
 	pt    *PeerTracker
 }
@@ -162,7 +168,7 @@ func NewServer(cfg *config.Config, store repository.Repository, log *zap.Logger)
 	}
 
 	// Connection tracker: maps peer OriginHost → active diam.Conn
-	ct := newConnTracker()
+	ct := newConnTracker(log, cfg.HSS.RoutePeers)
 
 	s6aH := s6a.NewHandlers(cfg, store, log, ct)
 	s13H := s13.NewHandlers(cfg, store, log)
@@ -179,7 +185,7 @@ func NewServer(cfg *config.Config, store repository.Repository, log *zap.Logger)
 		}
 	})
 	pt := newPeerTracker()
-	s := &Server{cfg: cfg, store: store, log: log, sm: machine, s6a: s6aH, s13: s13H, cxH: cxH, gxH: gxH, ct: ct, pt: pt}
+	s := &Server{cfg: cfg, store: store, log: log, sm: machine, s6a: s6aH, s13: s13H, cxH: cxH, gxH: gxH, s6cH: s6cH, ct: ct, pt: pt}
 
 	h := s6aH
 	shH := sh.NewHandlers(cfg, store, log, ct)
@@ -367,17 +373,33 @@ func NewServer(cfg *config.Config, store repository.Repository, log *zap.Logger)
 				)
 				peer.OriginHost = string(meta.OriginHost)
 				peer.OriginRealm = string(meta.OriginRealm)
+				// Make a directly connected peer reachable for HSS-initiated
+				// requests (ALR, CLR, RAR, ...) as soon as CER/CEA completes,
+				// without waiting for it to send its first request.
+				// A peer advertising the Relay Application-Id (a DRA) is also
+				// the fallback route for destinations with no tracked
+				// connection; see ConnTracker.GetConn.
+				if meta.OriginHost != "" {
+					if slices.Contains(meta.Applications, appIDRelay) {
+						ct.SetRelay(string(meta.OriginHost), conn)
+						fields = append(fields, zap.Bool("relay", true))
+					} else {
+						ct.Set(string(meta.OriginHost), conn)
+					}
+				}
 			}
 			pt.add(peer)
 			log.Info("diameter: peer connected", fields...)
 
-			// Remove from tracker and log when the peer disconnects.
+			// Remove from trackers and log when the peer disconnects.
 			if cn, ok := conn.(diam.CloseNotifier); ok {
-				go func(addr string, fields []zap.Field) {
+				go func(conn diam.Conn, addr string, fields []zap.Field) {
 					<-cn.CloseNotify()
 					pt.remove(addr)
-					log.Info("diameter: peer disconnected", fields...)
-				}(remoteAddr, fields)
+					removed := ct.DeleteConn(conn)
+					log.Info("diameter: peer disconnected",
+						append(fields, zap.Strings("untracked_hosts", removed))...)
+				}(conn, remoteAddr, fields)
 			}
 		}
 	}()
@@ -422,6 +444,12 @@ func (s *Server) Start() error {
 
 	errCh := make(chan error, 2)
 
+	if secs := s.cfg.S6c.AlertRetryInterval; secs > 0 {
+		go s.s6cH.RunAlertRetry(context.Background(),
+			time.Duration(secs)*time.Second,
+			time.Duration(s.cfg.S6c.AlertRetryMaxInterval)*time.Second)
+	}
+
 	// TCP listener (always on)
 	go func() {
 		errCh <- s.serveNetwork("tcp", addr, dscp)
@@ -464,6 +492,36 @@ func (s *Server) serveNetwork(network, addr string, dscp int) error {
 		}
 	}
 	ln = maybeWrapDSCPListener(ln, dscp, s.log)
-	srv := &diam.Server{Network: network, Addr: addr, Handler: s.sm, Dict: dict.Default}
+	srv := &diam.Server{Network: network, Addr: addr, Handler: s.handler(), Dict: dict.Default}
 	return srv.Serve(ln)
+}
+
+// handler returns the diam.Handler the listeners serve.
+func (s *Server) handler() diam.Handler {
+	return closeNotifyArmingHandler{s.sm}
+}
+
+// closeNotifyArmingHandler arms each connection's close notification from the
+// connection's own serve goroutine, before the state machine sees the message.
+//
+// In go-diameter v4.0.4 a TCP conn's CloseNotify() only prepares a pipe-copy
+// watcher; it is started on the conn's *next* Read. The HandshakeNotify
+// goroutine in NewServer calls CloseNotify() asynchronously, usually after the
+// serve loop is already blocked in that Read, so the watcher only starts once
+// the peer sends another message. If the peer disconnects first, the serve
+// loop sees EOF directly and exits without firing CloseNotify, leaving the
+// peer in the connection and peer trackers forever. Arming here — on CER, in
+// the serve goroutine — guarantees the watcher is running for the next Read.
+//
+// Embedding *sm.StateMachine keeps Error/ErrorReports, so diam.Server still
+// finds the ErrorReporter and read errors keep reaching the drain goroutine.
+type closeNotifyArmingHandler struct {
+	*sm.StateMachine
+}
+
+func (h closeNotifyArmingHandler) ServeDIAM(conn diam.Conn, msg *diam.Message) {
+	if cn, ok := conn.(diam.CloseNotifier); ok {
+		cn.CloseNotify()
+	}
+	h.StateMachine.ServeDIAM(conn, msg)
 }
