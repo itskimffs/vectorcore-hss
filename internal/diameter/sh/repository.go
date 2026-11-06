@@ -9,7 +9,7 @@ package sh
 // Server stores a document per IMS Public User Identity and Service-Indication,
 // such as the MMTel supplementary services under "MMTEL-Services" (TS 29.364).
 //
-// Not supported: Sh-Subs-Notif and Sh-Notif for repository data, the
+// Sh-Subs-Notif and Sh-Notif are in subscription.go. Not supported: the
 // Update-Eff and Update-Eff-Enhance features (several instances in one request)
 // and shared data for alias identities.
 
@@ -262,6 +262,7 @@ func (h *Handlers) PUR(_ diam.Conn, msg *diam.Message) (*diam.Message, error) {
 
 	h.log.Info("sh: repository data updated", zap.String("identity", identity),
 		zap.String("service_indication", rd.ServiceIndication), zap.Int("sequence_number", seq), zap.Bool("removed", data == nil))
+	go h.NotifyRepositoryData(sub.IMSSubscriberID, rd.ServiceIndication, diameterIdentity(msg, avp.OriginHost))
 	ans := avputil.ConstructSuccessAnswer(msg, sessionID(msg), h.originHost, h.originRealm, AppIDSh)
 	addVendorSpecificApplicationID(ans)
 	ans.NewAVP(avpRepositoryDataID, avp.Vbit, Vendor3GPP, &diam.GroupedAVP{AVP: []*diam.AVP{

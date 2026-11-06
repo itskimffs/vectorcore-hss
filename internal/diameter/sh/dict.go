@@ -77,9 +77,43 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
         <rule avp="Route-Record" required="false"/>
       </answer>
     </command>
+    <!-- TS 29.329 6.1.5 and 6.1.6 -->
+    <command code="308" short="SN" name="Subscribe-Notifications">
+      <request>
+        <rule avp="Session-Id" required="true" max="1"/>
+        <rule avp="Vendor-Specific-Application-Id" required="false" max="1"/>
+        <rule avp="Auth-Session-State" required="true" max="1"/>
+        <rule avp="Origin-Host" required="true" max="1"/>
+        <rule avp="Origin-Realm" required="true" max="1"/>
+        <rule avp="Destination-Host" required="false" max="1"/>
+        <rule avp="Destination-Realm" required="true" max="1"/>
+        <rule avp="User-Identity" required="true" max="1"/>
+        <rule avp="Service-Indication" required="false"/>
+        <rule avp="Send-Data-Indication" required="false" max="1"/>
+        <rule avp="Subs-Req-Type" required="true" max="1"/>
+        <rule avp="Data-Reference" required="true"/>
+        <rule avp="Expiry-Time" required="false" max="1"/>
+        <rule avp="Proxy-Info" required="false"/>
+        <rule avp="Route-Record" required="false"/>
+      </request>
+      <answer>
+        <rule avp="Session-Id" required="true" max="1"/>
+        <rule avp="Vendor-Specific-Application-Id" required="false" max="1"/>
+        <rule avp="Auth-Session-State" required="true" max="1"/>
+        <rule avp="Result-Code" required="false" max="1"/>
+        <rule avp="Experimental-Result" required="false" max="1"/>
+        <rule avp="Origin-Host" required="true" max="1"/>
+        <rule avp="Origin-Realm" required="true" max="1"/>
+        <rule avp="User-Data" required="false" max="1"/>
+        <rule avp="Expiry-Time" required="false" max="1"/>
+        <rule avp="Proxy-Info" required="false"/>
+        <rule avp="Route-Record" required="false"/>
+      </answer>
+    </command>
     <command code="309" short="PN" name="Push-Notification">
       <request>
         <rule avp="Session-Id" required="true" max="1"/>
+        <rule avp="Vendor-Specific-Application-Id" required="false" max="1"/>
         <rule avp="Auth-Session-State" required="true" max="1"/>
         <rule avp="Origin-Host" required="true" max="1"/>
         <rule avp="Origin-Realm" required="true" max="1"/>
@@ -92,6 +126,7 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
         <rule avp="Session-Id" required="true" max="1"/>
         <rule avp="Auth-Session-State" required="true" max="1"/>
         <rule avp="Result-Code" required="false" max="1"/>
+        <rule avp="Experimental-Result" required="false" max="1"/>
         <rule avp="Origin-Host" required="true" max="1"/>
         <rule avp="Origin-Realm" required="true" max="1"/>
       </answer>
@@ -127,6 +162,21 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
     </avp>
     <avp name="Sequence-Number" code="716" must="V" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Unsigned32"/>
+    </avp>
+    <avp name="Subs-Req-Type" code="705" must="M,V" must-not="-" may-encrypt="N" vendor-id="10415">
+      <data type="Enumerated">
+        <item code="0" name="Subscribe"/>
+        <item code="1" name="Unsubscribe"/>
+      </data>
+    </avp>
+    <avp name="Expiry-Time" code="709" must="V" must-not="M" may-encrypt="N" vendor-id="10415">
+      <data type="Time"/>
+    </avp>
+    <avp name="Send-Data-Indication" code="710" must="V" must-not="M" may-encrypt="N" vendor-id="10415">
+      <data type="Enumerated">
+        <item code="0" name="USER_DATA_NOT_REQUESTED"/>
+        <item code="1" name="USER_DATA_REQUESTED"/>
+      </data>
     </avp>
     <avp name="Data-Reference" code="703" must="M,V" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="Enumerated">

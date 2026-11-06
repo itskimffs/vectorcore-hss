@@ -1,4 +1,4 @@
-// Modified by itskimffs (2026-11), see NOTICE: Sh repository data.
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data and subscriptions to it.
 // This file is part of vectorcore-hss, licensed under the Apache License,
 // Version 2.0 (see LICENSE).
 
@@ -61,6 +61,7 @@ type Server struct {
 	cxH   *cx.Handlers
 	gxH   *gx.Handlers
 	s6cH  *s6c.Handlers
+	shH   *sh.Handlers
 	ct    *ConnTracker
 	pt    *PeerTracker
 }
@@ -189,6 +190,7 @@ func NewServer(cfg *config.Config, store repository.Repository, log *zap.Logger)
 
 	h := s6aH
 	shH := sh.NewHandlers(cfg, store, log, ct)
+	s.shH = shH
 	swxH := swx.NewHandlers(cfg, store, log, ct)
 	rxH := rx.NewHandlers(cfg, store, log, ct)
 	slhH := slh.NewHandlers(cfg, store, log)
@@ -282,6 +284,7 @@ func NewServer(cfg *config.Config, store repository.Repository, log *zap.Logger)
 	machine.HandleFunc("UDR", wrap("UDR", shH.UDR))
 	// Sh Profile-Update. Not "PUR", which go-diameter takes as S6a Purge-UE.
 	machine.HandleIdx(diam.CommandIndex{AppID: sh.AppIDSh, Code: 307, Request: true}, diam.HandlerFunc(wrap("Sh-PUR", shH.PUR)))
+	machine.HandleIdx(diam.CommandIndex{AppID: sh.AppIDSh, Code: 308, Request: true}, diam.HandlerFunc(wrap("Sh-SNR", shH.SNR)))
 	machine.HandleFunc("PNA", func(conn diam.Conn, msg *diam.Message) {
 		shH.PNA(conn, msg)
 	})
@@ -426,6 +429,12 @@ func NewServer(cfg *config.Config, store repository.Repository, log *zap.Logger)
 // Cancel-Location-Request with Cancellation-Type = SUBSCRIPTION_WITHDRAWAL.
 func (s *Server) SendCLRByIMSI(ctx context.Context, imsi string) error {
 	return s.s6a.SendCLRByIMSI(ctx, imsi, s6a.CancellationTypeSubscriptionWithdrawal)
+}
+
+// NotifyRepositoryData sends a Sh PNR with the current repository data to the
+// Application Servers subscribed to it. The API calls it after a change.
+func (s *Server) NotifyRepositoryData(imsSubscriberID int, serviceIndication string) {
+	s.shH.NotifyRepositoryData(imsSubscriberID, serviceIndication, "")
 }
 
 // SendIDRByIMSI pushes updated subscriber data to the serving MME.

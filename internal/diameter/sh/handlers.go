@@ -1,4 +1,4 @@
-// Modified by itskimffs (2026-11), see NOTICE: Sh repository data.
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data and subscriptions to it.
 // This file is part of vectorcore-hss, licensed under the Apache License,
 // Version 2.0 (see LICENSE).
 
@@ -36,6 +36,10 @@ type Handlers struct {
 	repository RepositoryDataStore
 	// repositoryAS is hss.ShRepositoryDataAS, lower case without a trailing dot.
 	repositoryAS map[string]bool
+	// subscriptions are the AS subscriptions to repository data (SNR), and
+	// sendPNR notifies one of them; it is SendPNR except in tests.
+	subscriptions subscriptions
+	sendPNR       func(publicIdentity, destHost, destRealm, userData string)
 }
 
 func NewHandlers(cfg *config.Config, store repository.Repository, log *zap.Logger, peers PeerLookup) *Handlers {
@@ -51,6 +55,7 @@ func NewHandlers(cfg *config.Config, store repository.Repository, log *zap.Logge
 
 		legacyPrefixedMSISDN: cfg.Sh.MSISDNEncoding == config.MSISDNEncodingLegacyPrefixed,
 	}
+	h.sendPNR = h.SendPNR
 	if rs, ok := store.(RepositoryDataStore); ok {
 		h.repository = rs
 	}

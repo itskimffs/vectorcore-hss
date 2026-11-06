@@ -8,7 +8,8 @@ package api
 // transparent data that Application Servers keep in the HSS, and set its
 // Sequence-Number. The AS that wrote the data still holds the old number, so its
 // next Sh PUR gets DIAMETER_ERROR_TRANSPARENT_DATA_OUT_OF_SYNC (5105) and it has
-// to read the data again (TS 29.328 §6.1.2). No Sh-Notif is sent.
+// to read the data again (TS 29.328 §6.1.2). An AS that has subscribed to the
+// data gets a Sh PNR with the new data.
 
 import (
 	"context"
@@ -163,6 +164,7 @@ func (s *Server) putIMSSubscriberRepositoryData(ctx context.Context, in *Reposit
 	if err != nil {
 		return nil, apiError(err)
 	}
+	s.notifyRepositoryData(in.ID, in.ServiceIndication)
 	return &RepositoryDataOutput{Body: &out}, nil
 }
 
@@ -183,5 +185,14 @@ func (s *Server) deleteIMSSubscriberRepositoryData(ctx context.Context, in *Repo
 	if err != nil {
 		return nil, apiError(err)
 	}
+	s.notifyRepositoryData(in.ID, in.ServiceIndication)
 	return nil, nil
+}
+
+// notifyRepositoryData sends the change to the subscribed Application
+// Servers, without holding up the answer.
+func (s *Server) notifyRepositoryData(id int, si string) {
+	if s.shNotify != nil {
+		go s.shNotify.NotifyRepositoryData(id, si)
+	}
 }
