@@ -6,7 +6,10 @@ itskimffs. It last merged upstream at commit 20698b6.
 
 Modifications in this fork (itskimffs, 2026-11); each modified file carries a notice:
 - Zh: the dictionary declares the Multimedia-Auth request and answer rules and
-  the SIP AVPs, so the HSS can read a BSF's MAR (internal/diameter/zh)
+  the SIP AVPs, so the HSS can read a BSF's MAR; the MAR resynchronises the
+  SQN from RAND || AUTS, and the MAA carries the GUSS (GBA-UserSecSettings,
+  TS 29.109 Annex A) with the IMS subscriber's public identities
+  (internal/diameter/zh)
 - Sh: repository data (transparent data) per IMS Public User Identity and
   Service-Indication, with PUR and UDR (TS 29.328, TS 29.329), the AS
   permission list hss.ShRepositoryDataAS and the table sh_repository_data

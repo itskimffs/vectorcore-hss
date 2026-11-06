@@ -1,3 +1,7 @@
+// Modified by itskimffs (2026-11), see NOTICE: Zh resynchronisation and GUSS.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package zh
 
 import (
@@ -46,6 +50,30 @@ func (h *Handlers) MAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 		return avputil.ConstructFailureAnswer(msg, mar.SessionID, h.originHost, h.originRealm, avputil.DiameterAuthenticationDataUnavailable), err
 	}
 
+	// A resynchronisation: SIP-Authorization is RAND || AUTS. Take the UE's
+	// SQN from AUTS and continue above it, as S6a does.
+	if mar.SIPAuthDataItem != nil && len(mar.SIPAuthDataItem.SIPAuthorization) > 0 {
+		resync := []byte(mar.SIPAuthDataItem.SIPAuthorization)
+		if len(resync) != 30 {
+			h.log.Warn("zh: MAR resync with bad length", zap.String("imsi", imsi), zap.Int("bytes", len(resync)))
+			return avputil.ConstructFailureAnswer(msg, mar.SessionID, h.originHost, h.originRealm, avputil.DiameterAuthenticationDataUnavailable), nil
+		}
+		newSQN, err := crypto.ResyncSQNFull(auc, profile, resync)
+		if err != nil {
+			h.log.Warn("zh: MAR resync failed", zap.String("imsi", imsi), zap.Error(err))
+			return avputil.ConstructFailureAnswer(msg, mar.SessionID, h.originHost, h.originRealm, avputil.DiameterAuthenticationDataUnavailable), nil
+		}
+		if err := h.store.ResyncSQN(ctx, auc.AUCID, newSQN+100); err != nil {
+			h.log.Error("zh: MAR resync update failed", zap.String("imsi", imsi), zap.Error(err))
+			return avputil.ConstructFailureAnswer(msg, mar.SessionID, h.originHost, h.originRealm, avputil.DiameterAuthenticationDataUnavailable), err
+		}
+		if auc, err = h.store.GetAUCByIMSI(ctx, imsi); err != nil {
+			h.log.Error("zh: MAR resync reload failed", zap.String("imsi", imsi), zap.Error(err))
+			return avputil.ConstructFailureAnswer(msg, mar.SessionID, h.originHost, h.originRealm, avputil.DiameterAuthenticationDataUnavailable), err
+		}
+		h.log.Info("zh: MAR resynchronised SQN", zap.String("imsi", imsi), zap.Int64("ue_sqn", newSQN))
+	}
+
 	vec, err := crypto.GenerateEAPAKAVector(auc, profile, h.store, ctx)
 	if err != nil {
 		h.log.Error("zh: MAR vector generation failed", zap.String("imsi", imsi), zap.Error(err))
@@ -76,5 +104,27 @@ func (h *Handlers) MAR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	ans.NewAVP(avpSIPNumberAuthItems, avp.Mbit|avp.Vbit, Vendor3GPP, datatype.Unsigned32(1))
 	ans.NewAVP(avpSIPAuthDataItem, avp.Mbit|avp.Vbit, Vendor3GPP,
 		&diam.GroupedAVP{AVP: authDataAVPs})
+	if g := h.guss(ctx, impi, imsi); g != nil {
+		ans.NewAVP(avpGBAUserSecSettings, avp.Mbit|avp.Vbit, Vendor3GPP, datatype.OctetString(g))
+	}
 	return ans, nil
+}
+
+// guss returns the GUSS for the subscriber, or nil when the IMSI has no IMS
+// subscriber. GBA-UserSecSettings is optional in the MAA (TS 29.109 6.1.2),
+// so a missing GUSS does not fail the bootstrap.
+func (h *Handlers) guss(ctx context.Context, impi, imsi string) []byte {
+	sub, err := h.store.GetIMSSubscriberByIMSI(ctx, imsi)
+	if err != nil {
+		if err != repository.ErrNotFound {
+			h.log.Warn("zh: MAR IMS subscriber lookup failed, no GUSS", zap.String("imsi", imsi), zap.Error(err))
+		}
+		return nil
+	}
+	g, err := buildGUSS(impi, sub, h.mcc, h.mnc)
+	if err != nil {
+		h.log.Error("zh: MAR GUSS failed", zap.String("imsi", imsi), zap.Error(err))
+		return nil
+	}
+	return g
 }

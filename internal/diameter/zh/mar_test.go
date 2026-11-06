@@ -28,6 +28,19 @@ const testIMSI = "001010000000001"
 type marStore struct {
 	repository.Repository
 	auc *models.AUC
+	sub *models.IMSSubscriber
+}
+
+func (s *marStore) GetIMSSubscriberByIMSI(_ context.Context, imsi string) (*models.IMSSubscriber, error) {
+	if s.sub != nil && s.sub.IMSI != nil && *s.sub.IMSI == imsi {
+		return s.sub, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (s *marStore) ResyncSQN(_ context.Context, _ int, sqn int64) error {
+	s.auc.SQN = sqn
+	return nil
 }
 
 func (s *marStore) GetAUCByIMSI(_ context.Context, imsi string) (*models.AUC, error) {
@@ -72,7 +85,7 @@ func wire(t *testing.T, m *diam.Message) *diam.Message {
 	return read
 }
 
-func zhMAR(impi string) *diam.Message {
+func zhMAR(impi string, item ...*diam.AVP) *diam.Message {
 	m := diam.NewRequest(303, AppIDZh, dict.Default)
 	m.NewAVP(avp.SessionID, avp.Mbit, 0, datatype.UTF8String("bsf.example.net;1;1"))
 	m.NewAVP(avp.VendorSpecificApplicationID, avp.Mbit, 0, &diam.GroupedAVP{AVP: []*diam.AVP{
@@ -85,9 +98,9 @@ func zhMAR(impi string) *diam.Message {
 	m.NewAVP(avp.DestinationRealm, avp.Mbit, 0, datatype.DiameterIdentity("example.net"))
 	m.NewAVP(avp.UserName, avp.Mbit, 0, datatype.UTF8String(impi))
 	m.NewAVP(avpSIPNumberAuthItems, avp.Mbit|avp.Vbit, Vendor3GPP, datatype.Unsigned32(1))
-	m.NewAVP(avpSIPAuthDataItem, avp.Mbit|avp.Vbit, Vendor3GPP, &diam.GroupedAVP{AVP: []*diam.AVP{
+	m.NewAVP(avpSIPAuthDataItem, avp.Mbit|avp.Vbit, Vendor3GPP, &diam.GroupedAVP{AVP: append([]*diam.AVP{
 		diam.NewAVP(avpSIPAuthenticationScheme, avp.Mbit|avp.Vbit, Vendor3GPP, datatype.UTF8String(schemeDigestAKAv1)),
-	}})
+	}, item...)})
 	return m
 }
 
@@ -95,7 +108,9 @@ func handler() *Handlers {
 	imsi := testIMSI
 	store := &marStore{auc: &models.AUC{AUCID: 1, Ki: "465b5ce8b199b49faa5f0a2ee238a6bc", OPc: "cd63cb71954a9f4e48a5994e37a02baf",
 		AMF: "8000", IMSI: &imsi}}
-	return NewHandlers(&config.Config{HSS: config.HSSConfig{OriginHost: "hss.example.net", OriginRealm: "example.net"}}, store, zap.NewNop())
+	store.sub = &models.IMSSubscriber{MSISDN: "4790000001", IMSI: &imsi}
+	return NewHandlers(&config.Config{HSS: config.HSSConfig{OriginHost: "hss.example.net", OriginRealm: "example.net",
+		MCC: "001", MNC: "01"}}, store, zap.NewNop())
 }
 
 func child(g *diam.GroupedAVP, code uint32) *diam.AVP {
