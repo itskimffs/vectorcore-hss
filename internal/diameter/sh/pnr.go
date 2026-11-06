@@ -1,3 +1,7 @@
+// Modified by itskimffs (2026-11), see NOTICE: Sh subscriptions to repository data.
+// This file is part of vectorcore-hss, licensed under the Apache License,
+// Version 2.0 (see LICENSE).
+
 package sh
 
 import (
@@ -31,6 +35,10 @@ func (h *Handlers) SendPNR(publicIdentity, destHost, destRealm, userData string)
 	sid := fmt.Sprintf("%s;%d;pnr", h.originHost, time.Now().UnixNano())
 	msg := diam.NewRequest(cmdPNR, AppIDSh, nil)
 	msg.NewAVP(avp.SessionID, avp.Mbit, 0, datatype.UTF8String(sid))
+	msg.NewAVP(avp.VendorSpecificApplicationID, avp.Mbit, 0, &diam.GroupedAVP{AVP: []*diam.AVP{
+		diam.NewAVP(avp.VendorID, avp.Mbit, 0, datatype.Unsigned32(Vendor3GPP)),
+		diam.NewAVP(avp.AuthApplicationID, avp.Mbit, 0, datatype.Unsigned32(AppIDSh)),
+	}})
 	msg.NewAVP(avp.AuthSessionState, avp.Mbit, 0, datatype.Enumerated(1))
 	msg.NewAVP(avp.OriginHost, avp.Mbit, 0, datatype.DiameterIdentity(h.originHost))
 	msg.NewAVP(avp.OriginRealm, avp.Mbit, 0, datatype.DiameterIdentity(h.originRealm))

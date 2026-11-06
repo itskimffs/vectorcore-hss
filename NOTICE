@@ -15,6 +15,10 @@ Modifications in this fork (itskimffs, 2026-11); each modified file carries a no
   permission list hss.ShRepositoryDataAS and the table sh_repository_data
   (internal/diameter/sh, internal/repository, internal/models, internal/config,
   internal/diameter/server.go, config/hss.yaml)
+- Sh: subscriptions to repository data (SNR/SNA) and notifications of its
+  changes (PNR) to the subscribed Application Servers, from PUR and from the
+  API (internal/diameter/sh, internal/diameter/server.go, internal/api,
+  cmd/hss/main.go)
 - API and web UI: view, change, add and delete Sh repository data, kept with
   the IMS subscriber on delete, backup and restore (internal/api, web/src)
 

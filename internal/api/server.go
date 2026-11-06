@@ -1,4 +1,4 @@
-// Modified by itskimffs (2026-11), see NOTICE: Sh repository data in the API and web UI.
+// Modified by itskimffs (2026-11), see NOTICE: Sh repository data in the API and web UI, and Sh notifications.
 // This file is part of vectorcore-hss, licensed under the Apache License,
 // Version 2.0 (see LICENSE).
 
@@ -29,6 +29,12 @@ import (
 // Diameter layer without importing the diameter package directly.
 type CLRSender interface {
 	SendCLRByIMSI(ctx context.Context, imsi string) error
+}
+
+// RepositoryNotifier tells the Application Servers subscribed over Sh that
+// repository data has changed.
+type RepositoryNotifier interface {
+	NotifyRepositoryData(imsSubscriberID int, serviceIndication string)
 }
 
 // IDRSender allows the API to push updated subscriber data to the serving MME.
@@ -90,15 +96,16 @@ type Server struct {
 	db           *gorm.DB
 	log          *zap.Logger
 	cfg          config.APIConfig
-	clr          CLRSender         // nil when CLR is not wired (e.g. Diameter disabled)
-	idr          IDRSender         // nil when S6a subscriber-data push is not wired
-	cache        CacheInvalidator  // nil when Diameter store is not wired
-	tac          *taccache.Cache   // nil when TAC DB is disabled in config
-	geored       GeoredManager     // nil when GeoRed is disabled
-	peers        PeerLister        // nil when Diameter is not wired
-	gsupPeers    ServicePeerLister // nil when GSUP is not wired
-	sbiPeers     ServicePeerLister // nil when SBI is not wired
-	authFailures AuthFailureLister // nil when Diameter is not wired
+	clr          CLRSender          // nil when CLR is not wired (e.g. Diameter disabled)
+	idr          IDRSender          // nil when S6a subscriber-data push is not wired
+	cache        CacheInvalidator   // nil when Diameter store is not wired
+	tac          *taccache.Cache    // nil when TAC DB is disabled in config
+	geored       GeoredManager      // nil when GeoRed is disabled
+	peers        PeerLister         // nil when Diameter is not wired
+	gsupPeers    ServicePeerLister  // nil when GSUP is not wired
+	sbiPeers     ServicePeerLister  // nil when SBI is not wired
+	authFailures AuthFailureLister  // nil when Diameter is not wired
+	shNotify     RepositoryNotifier // nil when Sh notifications are not wired
 }
 
 // WithTAC attaches the TAC cache so API writes keep the cache in sync.
@@ -139,6 +146,13 @@ func (s *Server) WithAuthFailures(a AuthFailureLister) *Server {
 // WithCLR attaches a CLR dispatcher to the API server.
 func (s *Server) WithCLR(c CLRSender) *Server {
 	s.clr = c
+	return s
+}
+
+// WithRepositoryNotifier attaches the Sh notifications of repository data
+// changes made in the API.
+func (s *Server) WithRepositoryNotifier(n RepositoryNotifier) *Server {
+	s.shNotify = n
 	return s
 }
 
