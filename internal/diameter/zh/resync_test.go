@@ -127,7 +127,7 @@ func TestMARGUSS(t *testing.T) {
 		t.Fatalf("%v: %s", err, doc)
 	}
 	if !strings.Contains(doc, `xmlns="urn:3gpp:gba:GBAGUSSSchema-R9:2010-02"`) || g.ID != impi || g.UICC != "GBA" ||
-		len(g.USS) != 1 || g.USS[0].Type != "0" ||
+		len(g.USS) != 1 || g.USS[0].ID != "0" || g.USS[0].Type != "0" ||
 		strings.Join(g.USS[0].UIDs, " ") != "tel:4790000001 sip:4790000001@ims.mnc001.mcc001.3gppnetwork.org" {
 		t.Errorf("%s", doc)
 	}
