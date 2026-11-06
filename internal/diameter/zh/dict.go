@@ -1,4 +1,4 @@
-// Modified by itskimffs (2026-11), see NOTICE: Zh dictionary.
+// Modified by itskimffs (2026-11), see NOTICE: Zh dictionary, resynchronisation and GUSS.
 // This file is part of vectorcore-hss, licensed under the Apache License,
 // Version 2.0 (see LICENSE).
 
@@ -60,6 +60,7 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
         <rule avp="Public-Identity" required="false" max="1"/>
         <rule avp="SIP-Number-Auth-Items" required="false" max="1"/>
         <rule avp="SIP-Auth-Data-Item" required="false"/>
+        <rule avp="GBA-UserSecSettings" required="false" max="1"/>
         <rule avp="Proxy-Info" required="false"/>
         <rule avp="Route-Record" required="false"/>
       </answer>
@@ -102,6 +103,10 @@ const dictXML = `<?xml version="1.0" encoding="UTF-8"?>
       <data type="OctetString"/>
     </avp>
     <avp name="Integrity-Key" code="626" must="M,V" must-not="-" may-encrypt="N" vendor-id="10415">
+      <data type="OctetString"/>
+    </avp>
+    <!-- 3GPP TS 29.109 6.3.1.1 -->
+    <avp name="GBA-UserSecSettings" code="400" must="M,V" must-not="-" may-encrypt="N" vendor-id="10415">
       <data type="OctetString"/>
     </avp>
   </application>
