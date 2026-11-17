@@ -21,6 +21,12 @@ Modifications in this fork (itskimffs, 2026-11); each modified file carries a no
   cmd/hss/main.go)
 - API and web UI: view, change, add and delete Sh repository data, kept with
   the IMS subscriber on delete, backup and restore (internal/api, web/src)
+- Sh PublicIdentifiers and the GUSS USS identities follow the IMS subscriber's
+  IFC profile template (the MSISDN identities it names, tel URIs first), so
+  +E.164 IMPUs in the profile reach Sh and Zh too; without a profile or such
+  identities they stay tel:<msisdn> and sip:<msisdn>@<domain>
+  (internal/ims/shprofile.go, internal/diameter/sh/udr.go,
+  internal/diameter/zh/guss.go, internal/diameter/zh/mar.go)
 
 The fork's earlier Rx change (no PCC rule for AF signalling) is now in
 upstream itself, as commit c13d1ae.

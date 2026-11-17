@@ -204,11 +204,16 @@ func (h *Handlers) UDR(conn diam.Conn, msg *diam.Message) (*diam.Message, error)
 	// IFC is only returned when explicitly requested (Data-Reference=13).
 	// For all other references (including RepositoryData=0) it must be omitted
 	// per 3GPP TS 29.328 §6.1.2 — data reference types are mutually exclusive.
-	var ifc *models.IFCProfile
-	if dataRef == DataReferenceInitialFilterCriteria && sub.IFCProfileID != nil {
-		ifc, _ = h.store.GetIFCProfileByID(ctx, *sub.IFCProfileID)
+	// The profile is read for every reference, since its template names the
+	// public identities (ims.MSISDNIdentities).
+	var ifc, template *models.IFCProfile
+	if sub.IFCProfileID != nil {
+		template, _ = h.store.GetIFCProfileByID(ctx, *sub.IFCProfileID)
 	}
-	profile := ims.BuildShUserData(sub, ifc, h.mcc, h.mnc)
+	if dataRef == DataReferenceInitialFilterCriteria {
+		ifc = template
+	}
+	profile := ims.BuildShUserData(sub, ifc, template, h.mcc, h.mnc)
 
 	h.log.Debug("sh: UDR success",
 		zap.String("identity", identity),

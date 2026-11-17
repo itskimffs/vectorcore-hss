@@ -16,6 +16,7 @@ import (
 
 	"github.com/svinson1121/vectorcore-hss/internal/crypto"
 	"github.com/svinson1121/vectorcore-hss/internal/diameter/avputil"
+	"github.com/svinson1121/vectorcore-hss/internal/models"
 	"github.com/svinson1121/vectorcore-hss/internal/repository"
 )
 
@@ -121,7 +122,11 @@ func (h *Handlers) guss(ctx context.Context, impi, imsi string) []byte {
 		}
 		return nil
 	}
-	g, err := buildGUSS(impi, sub, h.mcc, h.mnc)
+	var template *models.IFCProfile
+	if sub.IFCProfileID != nil {
+		template, _ = h.store.GetIFCProfileByID(ctx, *sub.IFCProfileID)
+	}
+	g, err := buildGUSS(impi, sub, template, h.mcc, h.mnc)
 	if err != nil {
 		h.log.Error("zh: MAR GUSS failed", zap.String("imsi", imsi), zap.Error(err))
 		return nil
